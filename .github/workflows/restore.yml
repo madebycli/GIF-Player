@@ -1,0 +1,54 @@
+name: One-time repository restore
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/restore.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.repository == 'madebycli/GIF-Player'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create clean source-only main branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAYLOAD_CHUNKS: >-
+            85e573ce7c79749a4814a2dcc3d4518a9b94f769
+            3fdeb84ca68163cb9f78857c9e8e4a121a994e39
+            2df401a47c47009d256c708ce38a3286336fe687
+            8f7098b374dbce31c89db189bfa8da5e11c2bc67
+            454cc809bb82e3cadd7a850ed6a6458db746f1c7
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          archive="$work/repository.tar.xz"
+          : > "$archive"
+
+          for sha in $PAYLOAD_CHUNKS; do
+            curl --fail --silent --show-error --location \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/git/blobs/$sha" \
+              | python3 -c 'import base64,json,sys; data=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(data["content"]))' \
+              >> "$archive"
+          done
+
+          mkdir "$work/source"
+          tar -xJf "$archive" -C "$work/source"
+          cd "$work/source"
+
+          git init
+          git config user.name "madebycli"
+          git config user.email "madebycli@users.noreply.github.com"
+          git add -A
+          git commit -m "restore: rebuild repository from recovered sources"
+          git branch -M main
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin main
