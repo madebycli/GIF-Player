@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gif-player"
+version = "0.3.0"
+description = "GTK3 layer-shell GIF overlay supervisor for Wayland"
+requires-python = ">=3.10"
+dependencies = ["PyGObject", "pycairo", "Pillow"]
+classifiers = [
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/madebycli/GIF-Player"
+Repository = "https://github.com/madebycli/GIF-Player"
+
+[project.scripts]
+gif-player = "gif_player_cli:main"
+gif-picker = "gif_picker_entry:main"
+gif-control = "gif_control_entry:main"
+
+[tool.setuptools]
+py-modules = [
+  "gif_player_paths",
+  "gif_player_ipc",
+  "gif_player_runtime",
+  "gif_player_runtime_guard",
+  "gif_player_runtime_patch",
+  "gif_player_bootstrap",
+  "gif_player_cli",
+  "gif_picker_entry",
+  "gif_control_entry",
+]
+
+[tool.setuptools.data-files]
+"libexec/gif-player" = [
+  "gif-script.py",
+  "gif-picker.py",
+  "gif-control.py",
+]
+"share/applications" = ["data/gif-player-picker.desktop", "data/gif-player-control.desktop"]
+"share/fish/vendor_functions.d" = ["gif.fish"]
+"share/fish/vendor_completions.d" = ["completions/gif-player.fish"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

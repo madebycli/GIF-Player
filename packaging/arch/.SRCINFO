@@ -1,0 +1,22 @@
+pkgbase = gif-player
+	pkgdesc = GTK3 layer-shell GIF overlay supervisor for Wayland
+	pkgver = 0.3.0
+	pkgrel = 1
+	url = https://github.com/madebycli/GIF-Player
+	arch = x86_64
+	arch = aarch64
+	license = custom:unlicensed
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-wheel
+	checkdepends = desktop-file-utils
+	depends = python
+	depends = python-gobject
+	depends = python-cairo
+	depends = python-pillow
+	depends = gtk3
+	depends = gtk-layer-shell
+	depends = gobject-introspection-runtime
+
+pkgname = gif-player

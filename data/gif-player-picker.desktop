@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=GIF Player Picker
+Comment=Choose and start GIF overlays
+Exec=gif-picker
+Terminal=false
+Categories=Utility;Graphics;

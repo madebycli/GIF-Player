@@ -1,0 +1,54 @@
+# Maintainer: GIF Player maintainers
+pkgname=gif-player
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='GTK3 layer-shell GIF overlay supervisor for Wayland'
+arch=('x86_64' 'aarch64')
+url='https://github.com/madebycli/GIF-Player'
+license=('custom:unlicensed')
+depends=(
+  'python'
+  'python-gobject'
+  'python-cairo'
+  'python-pillow'
+  'gtk3'
+  'gtk-layer-shell'
+  'gobject-introspection-runtime'
+)
+makedepends=(
+  'python-build'
+  'python-installer'
+  'python-setuptools'
+  'python-wheel'
+)
+checkdepends=('desktop-file-utils')
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/../.."
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$startdir/../.."
+  python -m compileall -q .
+  python -m unittest discover -s tests -v
+  desktop-file-validate data/gif-player-picker.desktop
+  desktop-file-validate data/gif-player-control.desktop
+}
+
+package() {
+  cd "$startdir/../.."
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 NOTICE.md "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
+
+  test -x "$pkgdir/usr/bin/gif-player"
+  test -x "$pkgdir/usr/bin/gif-picker"
+  test -x "$pkgdir/usr/bin/gif-control"
+  test -f "$pkgdir/usr/libexec/gif-player/gif-script.py"
+  test -f "$pkgdir/usr/libexec/gif-player/gif-picker.py"
+  test -f "$pkgdir/usr/libexec/gif-player/gif-control.py"
+  test -f "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
+  test ! -e "$pkgdir/usr/libexec/gif-player/Gifs"
+}
