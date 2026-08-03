@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths: [.github/workflows/restore.yml]
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
