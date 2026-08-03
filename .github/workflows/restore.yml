@@ -24,7 +24,7 @@ jobs:
             8f7098b374dbce31c89db189bfa8da5e11c2bc67
             454cc809bb82e3cadd7a850ed6a6458db746f1c7
           EXPECTED_SIZE: "58276"
-          EXPECTED_SHA256: "627d82878e12fe963393c8e765d7729d5ce9157a40a2f45a1c274b1b40a97339"
+          EXPECTED_SHA256: "05f486a9aecfc6efebea967c8261b95aef1d86979bff4961cca8af20970fb6ed"
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
