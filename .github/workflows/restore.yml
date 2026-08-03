@@ -23,6 +23,7 @@ jobs:
             2df401a47c47009d256c708ce38a3286336fe687
             8f7098b374dbce31c89db189bfa8da5e11c2bc67
             454cc809bb82e3cadd7a850ed6a6458db746f1c7
+            1bc81e4b273209ce55bf8b89905290815b9a970e
           EXPECTED_SIZE: "58276"
           EXPECTED_SHA256: "05f486a9aecfc6efebea967c8261b95aef1d86979bff4961cca8af20970fb6ed"
         run: |
