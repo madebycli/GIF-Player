@@ -192,8 +192,6 @@ nix build .#gif-player --print-build-logs
 
 The automated checks cover the CLI, isolated XDG paths, runtime permissions, protocol behavior, frame handling, animation timing, package closure, GTK typelibs, and reproducible Nix builds. A real Wayland session is still required for visual end-to-end testing.
 
-For implementation details, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
-
 ## Project status and copyright
 
 GIF Player is independently developed and is not affiliated with another GIF-overlay project. It does not include third-party GIFs, anime media, or artwork.
