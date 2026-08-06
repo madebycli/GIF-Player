@@ -60,3 +60,13 @@ jobs:
           nix build .#gif-player --no-write-lock-file --print-build-logs
           ./result/bin/gif-player --help >/dev/null
           ./result/bin/gif-player self-test | grep -q '"protocol": 2'
+      - name: Verify direct GitHub profile install
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DIRECT_PROFILE: ${{ runner.temp }}/gif-player-profile
+        run: |
+          set -euo pipefail
+          nix profile add --profile "$DIRECT_PROFILE" \
+            "github:${GITHUB_REPOSITORY}#gif-player"
+          test -x "$DIRECT_PROFILE/bin/gif-player"
+          "$DIRECT_PROFILE/bin/gif-player" --help >/dev/null
