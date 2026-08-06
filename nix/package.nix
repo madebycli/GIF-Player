@@ -17,6 +17,16 @@
 }:
 
 let
+  versionLines = lib.splitString "\n" (builtins.readFile ../pyproject.toml);
+  versionLine = lib.findFirst (
+    line: builtins.match "version = \"([^\"]+)\"" line != null
+  ) null versionLines;
+  versionMatch =
+    if versionLine == null then
+      throw "Unable to read GIF Player version from pyproject.toml"
+    else
+      builtins.match "version = \"([^\"]+)\"" versionLine;
+  packageVersion = builtins.elemAt versionMatch 0;
   python = python3.withPackages (
     pythonPackages: with pythonPackages; [
       pygobject3
@@ -84,7 +94,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "gif-player";
-  version = "0.3.0";
+  version = packageVersion;
 
   src = lib.cleanSource ../.;
   strictDeps = true;
