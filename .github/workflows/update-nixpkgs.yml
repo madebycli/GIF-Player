@@ -1,0 +1,63 @@
+name: Update Nixpkgs input
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gif-player-nixpkgs-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: Refresh Nixpkgs lock
+        id: update
+        run: |
+          set -euo pipefail
+          nix flake update nixpkgs --refresh
+          unexpected="$(git diff --name-only | grep -Ev '^flake\.lock$' || true)"
+          if [ -n "$unexpected" ]; then printf 'Unexpected files changed:\n%s\n' "$unexpected" >&2; exit 1; fi
+          if git diff --quiet -- flake.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --check
+            git diff --stat -- flake.lock
+          fi
+      - name: Validate updated dependency set
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          nix flake show --no-write-lock-file
+          nix flake check --no-write-lock-file --print-build-logs
+          nix build .#gif-player --no-write-lock-file --print-build-logs
+          ./result/bin/gif-player --help >/dev/null
+      - name: Publish validated lock
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "main advanced during validation; next run will retry" >&2; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flake.lock
+          git commit -m "chore(deps): refresh Nixpkgs input"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:main
