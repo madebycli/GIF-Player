@@ -1,4 +1,5 @@
 name: CI
+# Verifies the current public direct-repository installation path.
 
 on:
   push:
