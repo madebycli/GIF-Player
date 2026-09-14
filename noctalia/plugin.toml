@@ -1,0 +1,81 @@
+id = "madebycli/gif-player"
+name = "GIF Player"
+version = "0.1.0"
+plugin_api = 24
+author = "madebycli"
+license = "All rights reserved"
+dependencies = []
+tags = ["animation", "desktop", "media", "utility"]
+icon = "photo-gif"
+description = "Control click-through animated GIF overlays directly from Noctalia."
+
+[[setting]]
+key = "gif_dir"
+type = "folder"
+label_key = "settings.gif_dir.label"
+description_key = "settings.gif_dir.description"
+default = ""
+
+[[setting]]
+key = "launch_scale"
+type = "double"
+label_key = "settings.launch_scale.label"
+description_key = "settings.launch_scale.description"
+default = 0.7
+
+[[setting]]
+key = "launch_opacity"
+type = "double"
+label_key = "settings.launch_opacity.label"
+description_key = "settings.launch_opacity.description"
+default = 1.0
+
+[[setting]]
+key = "launch_speed"
+type = "double"
+label_key = "settings.launch_speed.label"
+description_key = "settings.launch_speed.description"
+default = 1.0
+
+[[setting]]
+key = "launch_locked"
+type = "bool"
+label_key = "settings.launch_locked.label"
+description_key = "settings.launch_locked.description"
+default = true
+
+[[setting]]
+key = "launch_bounce"
+type = "bool"
+label_key = "settings.launch_bounce.label"
+description_key = "settings.launch_bounce.description"
+default = false
+
+[[setting]]
+key = "launch_jump"
+type = "bool"
+label_key = "settings.launch_jump.label"
+description_key = "settings.launch_jump.description"
+default = false
+
+[[setting]]
+key = "launch_jump_rate"
+type = "double"
+label_key = "settings.launch_jump_rate.label"
+description_key = "settings.launch_jump_rate.description"
+default = 6.0
+
+[[widget]]
+id = "gif-player"
+entry = "widget.luau"
+
+[widget.actions]
+middle = "none"
+
+[[panel]]
+id = "manager"
+entry = "panel.luau"
+width = 760
+height = 720
+placement = "attached"
+position = "auto"
