@@ -74,14 +74,7 @@ pub fn scaled_size(source_width: u32, source_height: u32, scale: f64) -> (u32, u
     (width, height)
 }
 
-pub fn fully_inside(
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    bounds_w: f64,
-    bounds_h: f64,
-) -> bool {
+pub fn fully_inside(x: f64, y: f64, width: f64, height: f64, bounds_w: f64, bounds_h: f64) -> bool {
     [x, y, width, height, bounds_w, bounds_h]
         .iter()
         .all(|value| value.is_finite())
@@ -125,7 +118,11 @@ pub fn bounce_axis(
     let position = if position.is_finite() { position } else { 0.0 };
     let velocity = if velocity.is_finite() { velocity } else { 0.0 };
     let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
-    let bound = if bound.is_finite() { bound.max(0.0) } else { 0.0 };
+    let bound = if bound.is_finite() {
+        bound.max(0.0)
+    } else {
+        0.0
+    };
     let item_size = if item_size.is_finite() {
         item_size.max(0.0)
     } else {
@@ -182,7 +179,11 @@ mod tests {
 
     #[test]
     fn normalize_keeps_free_finite_positions() {
-        let mut state = PlayerState { x: -900.0, y: 4000.0, ..PlayerState::default() };
+        let mut state = PlayerState {
+            x: -900.0,
+            y: 4000.0,
+            ..PlayerState::default()
+        };
         state.normalize();
         assert_eq!(state.x, -900.0);
         assert_eq!(state.y, 4000.0);
