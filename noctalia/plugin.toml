@@ -3,10 +3,10 @@ name = "GIF Player"
 version = "0.1.0"
 plugin_api = 24
 author = "madebycli"
-license = "All rights reserved"
+license = "Proprietary"
 dependencies = []
 tags = ["animation", "desktop", "media", "utility"]
-icon = "photo-gif"
+icon = "photo"
 description = "Control click-through animated GIF overlays directly from Noctalia."
 
 [[setting]]
