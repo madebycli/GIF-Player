@@ -1,0 +1,36 @@
+{
+  "settings": {
+    "gif_dir": {
+      "label": "GIF-Ordner",
+      "description": "Ordner mit der GIF-Sammlung. Leer lassen, um den XDG-Standardpfad von GIF Player zu verwenden."
+    },
+    "launch_scale": {
+      "label": "Standardgröße",
+      "description": "Skalierung für GIFs, die über das Noctalia-Panel gestartet werden."
+    },
+    "launch_opacity": {
+      "label": "Standarddeckkraft",
+      "description": "Deckkraft für GIFs, die über das Noctalia-Panel gestartet werden."
+    },
+    "launch_speed": {
+      "label": "Standardtempo",
+      "description": "Animationsgeschwindigkeit für GIFs, die über das Noctalia-Panel gestartet werden."
+    },
+    "launch_locked": {
+      "label": "Gesperrt starten",
+      "description": "Overlays durchklickbar starten, damit Mausereignisse die Fenster darunter erreichen."
+    },
+    "launch_bounce": {
+      "label": "Bounce beim Start",
+      "description": "Neu gestartete Overlays direkt im Bounce-Modus starten."
+    },
+    "launch_jump": {
+      "label": "Auto-Jump aktivieren",
+      "description": "Zufällige automatische Sprünge für neu gestartete Overlays aktivieren."
+    },
+    "launch_jump_rate": {
+      "label": "Auto-Jump-Intervall",
+      "description": "Mittlerer Abstand in Sekunden zwischen automatischen Sprüngen."
+    }
+  }
+}
