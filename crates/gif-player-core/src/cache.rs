@@ -71,12 +71,7 @@ impl<T> SharedCache<T> {
         value
     }
 
-    pub fn get_or_insert_with<F>(
-        &mut self,
-        key: PathBuf,
-        bytes: usize,
-        load: F,
-    ) -> Arc<T>
+    pub fn get_or_insert_with<F>(&mut self, key: PathBuf, bytes: usize, load: F) -> Arc<T>
     where
         F: FnOnce() -> T,
     {
