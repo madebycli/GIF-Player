@@ -168,7 +168,11 @@ mod tests {
     #[test]
     fn spawn_does_not_clamp_manual_positions() {
         let mut manager = WidgetManager::default();
-        let state = PlayerState { x: -250.0, y: 3000.0, ..PlayerState::default() };
+        let state = PlayerState {
+            x: -250.0,
+            y: 3000.0,
+            ..PlayerState::default()
+        };
         let widget = manager
             .spawn(PathBuf::from("/gifs/cat.gif"), None, state, None, None)
             .expect("spawn");
