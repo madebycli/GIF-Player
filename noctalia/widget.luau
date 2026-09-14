@@ -1,88 +1,47 @@
 --!nonstrict
+-- Noctalia-native bar launcher. The bridge service owns daemon status.
 
-local pending = false
-local widgets = {}
-local lastError = ""
-
-local function run(args, callback)
-  local argv = { "gif-player" }
-  for _, value in ipairs(args) do
-    table.insert(argv, tostring(value))
-  end
-  return noctalia.runAsync(argv, callback, 5000)
-end
+local count = tonumber(noctalia.state.get("widget_count")) or 0
+local online = noctalia.state.get("daemon_online") == true
 
 local function render()
-  barWidget.setGlyph("photo")
-  if #widgets > 0 then
-    barWidget.setText(tostring(#widgets))
+  local glyph = noctalia.getConfig("glyph")
+  if type(glyph) ~= "string" or glyph == "" then glyph = "photo" end
+  local showCount = noctalia.getConfig("show_count") ~= false
+
+  barWidget.setGlyph(glyph)
+  barWidget.setText(showCount and count > 0 and tostring(count) or "")
+  if online then
+    barWidget.setTooltip(count == 1 and "GIF Player · 1 overlay" or ("GIF Player · " .. tostring(count) .. " overlays"))
   else
-    barWidget.setText("")
+    barWidget.setTooltip("GIF Player · daemon offline")
   end
-
-  local tooltip = {
-    { key = "GIF Player", value = #widgets == 1 and "1 widget" or (tostring(#widgets) .. " widgets") },
-  }
-  if lastError ~= "" then
-    table.insert(tooltip, { key = "Status", value = lastError })
-  end
-  barWidget.setTooltip(tooltip)
-end
-
-local function refresh()
-  if pending then return end
-  pending = true
-  run({ "list", "--json" }, function(result)
-    pending = false
-    if result.exitCode ~= 0 and noctalia.string.trim(result.stdout or "") == "" then
-      widgets = {}
-      lastError = "daemon offline"
-      render()
-      return
-    end
-
-    local decoded, err = noctalia.json.decode(result.stdout or "")
-    if decoded == nil then
-      widgets = {}
-      lastError = err or "invalid status"
-      render()
-      return
-    end
-
-    if decoded.ok then
-      widgets = decoded.widgets or {}
-      lastError = ""
-    else
-      widgets = {}
-      lastError = decoded.error or "daemon offline"
-    end
-    render()
-  end)
 end
 
 function update()
-  noctalia.setUpdateInterval(2000)
   render()
-  refresh()
 end
 
 function onClick()
-  noctalia.togglePanel("madebycli/gif-player:manager")
+  noctalia.togglePanel("madebycli/gif-player:picker")
 end
 
 function onRightClick()
-  noctalia.openSettings()
+  noctalia.togglePanel("madebycli/gif-player:controls")
 end
 
 function onMiddleClick()
-  local anyUnlocked = false
-  for _, status in ipairs(widgets) do
-    if status.locked == false then
-      anyUnlocked = true
-      break
-    end
-  end
-  run({ anyUnlocked and "lock" or "edit" }, function(_result)
-    refresh()
-  end)
+  noctalia.openSettings()
 end
+
+noctalia.state.watch("widget_count", function(value)
+  count = tonumber(value) or 0
+  render()
+end)
+
+noctalia.state.watch("daemon_online", function(value)
+  online = value == true
+  render()
+end)
+
+render()
