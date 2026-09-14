@@ -52,7 +52,8 @@ impl Animation {
     }
 
     pub fn load_with_budget(path: &Path, max_decoded_bytes: usize) -> Result<Self> {
-        let file = File::open(path).with_context(|| format!("cannot open GIF {}", path.display()))?;
+        let file =
+            File::open(path).with_context(|| format!("cannot open GIF {}", path.display()))?;
         let decoder = GifDecoder::new(BufReader::new(file))
             .with_context(|| format!("cannot decode GIF {}", path.display()))?;
         let decoded = decoder
