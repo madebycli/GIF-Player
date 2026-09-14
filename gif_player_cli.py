@@ -15,7 +15,7 @@ from gif_player_ipc import build_widget_cmd, daemon_send, ensure_daemon
 from gif_player_paths import AppPaths, get_paths
 
 KNOWN_COMMANDS = {
-    "run", "ipc", "all", "list", "edit", "lock", "stop-all", "kill-all",
+    "run", "ipc", "all", "list", "catalog", "edit", "lock", "stop-all", "kill-all",
     "picker", "control", "daemon", "self-test", "doctor",
 }
 
@@ -44,6 +44,22 @@ def resolve_gif(value: str, gif_dir: Path) -> Path:
     return matches[0]
 
 
+def _catalog(gif_dir: Path) -> list[dict[str, str]]:
+    if not gif_dir.is_dir():
+        return []
+    result = []
+    for path in sorted(gif_dir.rglob("*"), key=lambda item: str(item).lower()):
+        if not path.is_file() or path.suffix.lower() != ".gif":
+            continue
+        resolved = path.resolve()
+        result.append({
+            "name": path.stem,
+            "relative": str(path.relative_to(gif_dir)),
+            "path": str(resolved),
+        })
+    return result
+
+
 def _extract_gif_dir(argv: list[str]) -> tuple[str | None, list[str]]:
     result: list[str] = []
     gif_dir: str | None = None
@@ -68,7 +84,7 @@ def _extract_gif_dir(argv: list[str]) -> tuple[str | None, list[str]]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gif-player",
-        description="GTK3-Wayland-GIF-Overlay mit Supervisor-Daemon und IPC v2",
+        description="Wayland-GIF-Overlay mit Supervisor-Daemon und IPC v2",
         epilog="Ohne Unterbefehl wird der Picker geöffnet. Ein GIF kann direkt per Name gestartet werden.",
     )
     parser.add_argument(
@@ -91,7 +107,9 @@ def _parser() -> argparse.ArgumentParser:
     all_parser = sub.add_parser("all", help="Befehl an alle Widgets senden")
     all_parser.add_argument("action_args", nargs="+")
 
-    sub.add_parser("list", help="Laufende Widget-IDs anzeigen")
+    list_parser = sub.add_parser("list", help="Laufende Widget-IDs anzeigen")
+    list_parser.add_argument("--json", action="store_true", help="vollständigen Daemon-Status als JSON ausgeben")
+    sub.add_parser("catalog", help="GIF-Sammlung als JSON ausgeben")
     sub.add_parser("edit", help="Alle Widgets entsperren")
     sub.add_parser("lock", help="Alle Widgets sperren")
     sub.add_parser("stop-all", aliases=["kill-all"], help="Alle Widgets beenden")
@@ -99,7 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("control", help="Control-Panel öffnen")
     sub.add_parser("daemon", help="Supervisor-Daemon (intern/manuell)")
     sub.add_parser("self-test", help="XDG-Pfade und Runtime-Sicherheit prüfen")
-    sub.add_parser("doctor", help="Python-Abhängigkeiten und GTK-Typelibs prüfen")
+    sub.add_parser("doctor", help="Runtime-Abhängigkeiten prüfen")
     return parser
 
 
@@ -201,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test(paths)
     if args.command == "doctor":
         return _doctor(paths)
+    if args.command == "catalog":
+        print(json.dumps({"ok": True, "gif_dir": str(paths.gif_dir), "gifs": _catalog(paths.gif_dir)}, ensure_ascii=False))
+        return 0
     if args.command == "daemon":
         return _run_daemon(paths)
     if args.command == "picker":
@@ -251,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         response = daemon_send(paths, {"action": "list"})
+        if args.json:
+            return _print_result(response)
         if not response.get("ok"):
             return 0
         for status in response.get("widgets", []):
