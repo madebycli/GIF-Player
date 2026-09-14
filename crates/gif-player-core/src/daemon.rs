@@ -409,7 +409,7 @@ mod tests {
     fn oversized_request_is_rejected_without_unbounded_buffering() {
         let mut core = DaemonCore::new();
         let (mut client, mut server) = UnixStream::pair().expect("socket pair");
-        let writer = std::thread::spawn(move || {
+        let writer = thread::spawn(move || {
             client
                 .write_all(&vec![b'x'; MAX_REQUEST_BYTES + 1])
                 .expect("write request");
