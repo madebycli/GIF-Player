@@ -37,8 +37,7 @@ impl DaemonCore {
     }
 
     pub fn dispatch(&mut self, request: Request) -> DispatchOutcome {
-        let action = request.action.clone();
-        let response = match action.as_str() {
+        let response = match request.action.as_str() {
             "ping" => json!({
                 "ok": true,
                 "daemon": true,
@@ -258,11 +257,11 @@ pub fn serve(socket_path: &Path) -> Result<()> {
 
     let mut core = DaemonCore::new();
     for connection in listener.incoming() {
-        let response = match connection {
+        let shutdown = match connection {
             Ok(mut stream) => handle_connection(&mut core, &mut stream),
             Err(error) => return Err(error).context("accept Unix socket connection"),
         }?;
-        if response {
+        if shutdown {
             break;
         }
     }
@@ -271,15 +270,36 @@ pub fn serve(socket_path: &Path) -> Result<()> {
 }
 
 fn handle_connection(core: &mut DaemonCore, stream: &mut UnixStream) -> Result<bool> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut bytes = Vec::new();
-    reader.read_until(b'\n', &mut bytes)?;
-    if bytes.len() > MAX_REQUEST_BYTES {
+    let bytes = read_bounded_request(stream)?;
+    if bytes.is_none() {
         return write_response(stream, json!({"error": "request exceeds 1 MiB limit"}), false);
     }
+    let bytes = bytes.expect("bounded request checked above");
     let request: Request = serde_json::from_slice(&bytes).context("parse IPC request")?;
     let outcome = core.dispatch(request);
     write_response(stream, outcome.response, outcome.shutdown)
+}
+
+fn read_bounded_request(stream: &UnixStream) -> Result<Option<Vec<u8>>> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut bytes = Vec::with_capacity(4096);
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            break;
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(available.len(), |index| index + 1);
+        if bytes.len().saturating_add(take) > MAX_REQUEST_BYTES {
+            return Ok(None);
+        }
+        bytes.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            break;
+        }
+    }
+    Ok(Some(bytes))
 }
 
 fn write_response(stream: &mut UnixStream, response: Value, shutdown: bool) -> Result<bool> {
@@ -324,7 +344,8 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::BufRead;
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_gif_path() -> PathBuf {
@@ -350,13 +371,20 @@ mod tests {
     fn spawn_duplicate_and_move_preserve_free_positions() {
         let path = test_gif_path();
         let mut core = DaemonCore::new();
-        for expected in ["gif-player-", "gif-player-"] {
-            let request: Request = serde_json::from_value(json!({"action": "spawn", "gif": path}))
-                .expect("spawn request");
-            let response = core.dispatch(request).response;
-            assert!(response["id"].as_str().expect("id").starts_with(expected));
-        }
-        let first_id = core.manager.statuses()[0].id.clone();
+        let first: Request = serde_json::from_value(json!({"action": "spawn", "gif": path}))
+            .expect("spawn request");
+        let first_id = core.dispatch(first).response["id"]
+            .as_str()
+            .expect("first id")
+            .to_string();
+        let second: Request = serde_json::from_value(json!({"action": "spawn", "gif": path}))
+            .expect("spawn request");
+        let second_id = core.dispatch(second).response["id"]
+            .as_str()
+            .expect("second id")
+            .to_string();
+        assert_eq!(second_id, format!("{first_id}-2"));
+
         let request: Request = serde_json::from_value(json!({
             "action": "move",
             "id": first_id,
@@ -371,18 +399,22 @@ mod tests {
     }
 
     #[test]
-    fn socket_server_rejects_oversized_request_without_crashing() {
+    fn oversized_request_is_rejected_without_unbounded_buffering() {
         let mut core = DaemonCore::new();
-        let path = std::env::temp_dir().join(format!("gif-player-test-{}.sock", std::process::id()));
         let (mut client, mut server) = UnixStream::pair().expect("socket pair");
-        client
-            .write_all(&vec![b'x'; MAX_REQUEST_BYTES + 1])
-            .expect("write request");
-        client.write_all(b"\n").expect("write newline");
+        let writer = thread::spawn(move || {
+            client
+                .write_all(&vec![b'x'; MAX_REQUEST_BYTES + 1])
+                .expect("write request");
+            client.write_all(b"\n").expect("write newline");
+            let mut line = String::new();
+            BufReader::new(client)
+                .read_line(&mut line)
+                .expect("read response");
+            line
+        });
         handle_connection(&mut core, &mut server).expect("handle request");
-        let mut response = String::new();
-        client.read_to_string(&mut response).expect("read response");
+        let response = writer.join().expect("writer thread");
         assert!(response.contains("request exceeds 1 MiB limit"));
-        let _ = fs::remove_file(path);
     }
 }
