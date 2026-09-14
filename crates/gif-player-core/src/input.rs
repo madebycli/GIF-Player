@@ -11,6 +11,18 @@ pub struct Rect {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputGeometry {
+    pub canvas_mode: bool,
+    pub dragging: bool,
+    pub gif_width: u32,
+    pub gif_height: u32,
+    pub surface_width: u32,
+    pub surface_height: u32,
+    pub hop_offset: f64,
+    pub padding: i32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputRegionMode {
     Empty,
@@ -18,41 +30,37 @@ pub enum InputRegionMode {
     FullSurface { width: u32, height: u32 },
 }
 
-pub fn input_region_mode(
-    state: &PlayerState,
-    canvas_mode: bool,
-    dragging: bool,
-    gif_width: u32,
-    gif_height: u32,
-    surface_width: u32,
-    surface_height: u32,
-    hop_offset: f64,
-    padding: i32,
-) -> InputRegionMode {
+pub fn input_region_mode(state: &PlayerState, geometry: InputGeometry) -> InputRegionMode {
     if state.locked {
         return InputRegionMode::Empty;
     }
-    if dragging {
+    if geometry.dragging {
         return InputRegionMode::FullSurface {
-            width: surface_width.max(1),
-            height: surface_height.max(1),
+            width: geometry.surface_width.max(1),
+            height: geometry.surface_height.max(1),
         };
     }
 
-    let (origin_x, origin_y) = if canvas_mode {
+    let (origin_x, origin_y) = if geometry.canvas_mode {
         (
-            state.x.floor() as i32 - padding,
-            (state.y - hop_offset).floor() as i32 - padding,
+            state.x.floor() as i32 - geometry.padding,
+            (state.y - geometry.hop_offset).floor() as i32 - geometry.padding,
         )
     } else {
-        (-padding, -padding)
+        (-geometry.padding, -geometry.padding)
     };
-    let pad = padding.max(0) as u32;
+    let pad = geometry.padding.max(0) as u32;
     InputRegionMode::Gif(Rect {
         x: origin_x,
         y: origin_y,
-        width: gif_width.saturating_add(pad.saturating_mul(2)).max(1),
-        height: gif_height.saturating_add(pad.saturating_mul(2)).max(1),
+        width: geometry
+            .gif_width
+            .saturating_add(pad.saturating_mul(2))
+            .max(1),
+        height: geometry
+            .gif_height
+            .saturating_add(pad.saturating_mul(2))
+            .max(1),
     })
 }
 
@@ -89,13 +97,25 @@ pub fn apply_input_region(
 mod tests {
     use super::*;
 
+    fn geometry() -> InputGeometry {
+        InputGeometry {
+            canvas_mode: true,
+            dragging: false,
+            gif_width: 100,
+            gif_height: 100,
+            surface_width: 1920,
+            surface_height: 1080,
+            hop_offset: 0.0,
+            padding: 8,
+        }
+    }
+
     #[test]
     fn locked_is_always_empty_even_while_drag_flag_is_set() {
         let state = PlayerState::default();
-        assert_eq!(
-            input_region_mode(&state, true, true, 100, 100, 1920, 1080, 0.0, 8),
-            InputRegionMode::Empty
-        );
+        let mut geometry = geometry();
+        geometry.dragging = true;
+        assert_eq!(input_region_mode(&state, geometry), InputRegionMode::Empty);
     }
 
     #[test]
@@ -104,8 +124,10 @@ mod tests {
             locked: false,
             ..PlayerState::default()
         };
+        let mut geometry = geometry();
+        geometry.dragging = true;
         assert_eq!(
-            input_region_mode(&state, true, true, 100, 100, 1920, 1080, 0.0, 8),
+            input_region_mode(&state, geometry),
             InputRegionMode::FullSurface {
                 width: 1920,
                 height: 1080
@@ -121,8 +143,14 @@ mod tests {
             locked: false,
             ..PlayerState::default()
         };
+        let geometry = InputGeometry {
+            gif_width: 80,
+            gif_height: 40,
+            hop_offset: 10.0,
+            ..geometry()
+        };
         assert_eq!(
-            input_region_mode(&state, true, false, 80, 40, 1920, 1080, 10.0, 8),
+            input_region_mode(&state, geometry),
             InputRegionMode::Gif(Rect {
                 x: 92,
                 y: 182,
