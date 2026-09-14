@@ -1,9 +1,9 @@
 name: CI
-# Verifies the current public direct-repository installation path.
+# Verifies the stable compatibility surface plus the active beta native core.
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta/native-noctalia-v2]
   pull_request:
   workflow_dispatch:
 
@@ -33,7 +33,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libcairo2-dev pkg-config
-      - name: Test Python sources
+      - name: Test Python compatibility sources
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -43,21 +43,23 @@ jobs:
           PYTHONPATH=. python gif_player_cli.py --help >/dev/null
           python -m build --wheel --no-isolation
 
-  rust:
+  rust-core:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-      - name: Check native renderer prototype
+      - name: Check beta native core
         run: |
           set -euo pipefail
           rustc --version
           cargo --version
-          cargo test --manifest-path renderer/Cargo.toml --all-targets
-          cargo clippy --manifest-path renderer/Cargo.toml --all-targets -- -D warnings
-          cargo fmt --manifest-path renderer/Cargo.toml --check
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo fmt --all --check
+          cargo run -q -p gif-player-core --bin gif-playerd-beta -- --self-test \
+            | grep -q '"frontend_neutral":true'
 
   nix:
     runs-on: ubuntu-latest
@@ -67,7 +69,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-      - name: Verify lock, check, and build Flake
+      - name: Verify compatibility lock, check, and build Flake
         run: |
           set -euo pipefail
           nix flake lock

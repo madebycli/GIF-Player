@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/gif-player-core"]
+exclude = ["renderer"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.86"
+license = "LicenseRef-Proprietary"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
