@@ -18,15 +18,22 @@ local function render()
   end
 end
 
+local function publishOutput(key)
+  local output = barWidget.outputName()
+  noctalia.state.set(key, type(output) == "string" and output or "")
+end
+
 function update()
   render()
 end
 
 function onClick()
+  publishOutput("picker_output")
   noctalia.togglePanel("madebycli/gif-player:picker")
 end
 
 function onRightClick()
+  publishOutput("controls_output")
   noctalia.togglePanel("madebycli/gif-player:controls")
 end
 
