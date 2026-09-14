@@ -136,7 +136,11 @@ impl WaylandRuntime {
         // overlay behavior matching the existing implementation.
         layer.set_exclusive_zone(-1);
         layer.set_size(0, 0);
-        apply_input_region(&self.state.compositor, layer.wl_surface(), InputRegionMode::Empty)?;
+        apply_input_region(
+            &self.state.compositor,
+            layer.wl_surface(),
+            InputRegionMode::Empty,
+        )?;
         layer.commit();
 
         self.state.surfaces.insert(
@@ -166,7 +170,9 @@ impl WaylandRuntime {
             .ok_or_else(|| anyhow!("No Wayland surface '{id}'"))?;
         apply_input_region(&self.state.compositor, record.layer.wl_surface(), mode)?;
         record.layer.commit();
-        self.connection.flush().context("flush input-region update")?;
+        self.connection
+            .flush()
+            .context("flush input-region update")?;
         Ok(())
     }
 
@@ -185,7 +191,9 @@ impl WaylandRuntime {
     }
 
     pub fn flush(&self) -> Result<()> {
-        self.connection.flush().context("flush Wayland connection")?;
+        self.connection
+            .flush()
+            .context("flush Wayland connection")?;
         Ok(())
     }
 }
@@ -262,14 +270,7 @@ impl CompositorHandler for WaylandState {
     ) {
     }
 
-    fn frame(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: u32,
-    ) {
-    }
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
 
     fn surface_enter(
         &mut self,
@@ -299,13 +300,7 @@ impl OutputHandler for WaylandState {
 
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 
-    fn output_destroyed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: wl_output::WlOutput,
-    ) {
-    }
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
 impl LayerShellHandler for WaylandState {
