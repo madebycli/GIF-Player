@@ -237,9 +237,9 @@ fn text<'a>(request: &'a Request, key: &str) -> Result<&'a str> {
 pub fn default_socket_path() -> PathBuf {
     let uid = unsafe { libc::geteuid() };
     match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(base) if Path::new(&base).is_absolute() => PathBuf::from(base)
-            .join("gif-player")
-            .join("daemon.sock"),
+        Some(base) if Path::new(&base).is_absolute() => {
+            PathBuf::from(base).join("gif-player").join("daemon.sock")
+        }
         _ => PathBuf::from(format!("/tmp/gif-player-{uid}/daemon.sock")),
     }
 }
@@ -272,7 +272,11 @@ pub fn serve(socket_path: &Path) -> Result<()> {
 fn handle_connection(core: &mut DaemonCore, stream: &mut UnixStream) -> Result<bool> {
     let bytes = read_bounded_request(stream)?;
     if bytes.is_none() {
-        return write_response(stream, json!({"error": "request exceeds 1 MiB limit"}), false);
+        return write_response(
+            stream,
+            json!({"error": "request exceeds 1 MiB limit"}),
+            false,
+        );
     }
     let bytes = bytes.expect("bounded request checked above");
     let request: Request = serde_json::from_slice(&bytes).context("parse IPC request")?;
@@ -335,7 +339,10 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
         Err(error) => return Err(error).context("inspect existing socket path"),
     };
     if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
-        return Err(anyhow!("refusing to replace non-socket path: {}", path.display()));
+        return Err(anyhow!(
+            "refusing to replace non-socket path: {}",
+            path.display()
+        ));
     }
     fs::remove_file(path)?;
     Ok(())
@@ -371,14 +378,14 @@ mod tests {
     fn spawn_duplicate_and_move_preserve_free_positions() {
         let path = test_gif_path();
         let mut core = DaemonCore::new();
-        let first: Request = serde_json::from_value(json!({"action": "spawn", "gif": path}))
-            .expect("spawn request");
+        let first: Request =
+            serde_json::from_value(json!({"action": "spawn", "gif": path})).expect("spawn request");
         let first_id = core.dispatch(first).response["id"]
             .as_str()
             .expect("first id")
             .to_string();
-        let second: Request = serde_json::from_value(json!({"action": "spawn", "gif": path}))
-            .expect("spawn request");
+        let second: Request =
+            serde_json::from_value(json!({"action": "spawn", "gif": path})).expect("spawn request");
         let second_id = core.dispatch(second).response["id"]
             .as_str()
             .expect("second id")
@@ -402,7 +409,7 @@ mod tests {
     fn oversized_request_is_rejected_without_unbounded_buffering() {
         let mut core = DaemonCore::new();
         let (mut client, mut server) = UnixStream::pair().expect("socket pair");
-        let writer = thread::spawn(move || {
+        let writer = std::thread::spawn(move || {
             client
                 .write_all(&vec![b'x'; MAX_REQUEST_BYTES + 1])
                 .expect("write request");
