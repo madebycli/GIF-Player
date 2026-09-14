@@ -1,0 +1,36 @@
+{
+  "settings": {
+    "gif_dir": {
+      "label": "GIF folder",
+      "description": "Folder containing the GIF collection. Leave empty to use the GIF Player XDG default."
+    },
+    "launch_scale": {
+      "label": "Default scale",
+      "description": "Scale applied when starting a GIF from the Noctalia panel."
+    },
+    "launch_opacity": {
+      "label": "Default opacity",
+      "description": "Opacity applied when starting a GIF from the Noctalia panel."
+    },
+    "launch_speed": {
+      "label": "Default speed",
+      "description": "Animation speed applied when starting a GIF from the Noctalia panel."
+    },
+    "launch_locked": {
+      "label": "Start locked",
+      "description": "Start overlays click-through so pointer input reaches windows underneath."
+    },
+    "launch_bounce": {
+      "label": "Start bouncing",
+      "description": "Start newly launched overlays in bounce mode."
+    },
+    "launch_jump": {
+      "label": "Enable auto jump",
+      "description": "Enable random automatic jumps for newly launched overlays."
+    },
+    "launch_jump_rate": {
+      "label": "Auto jump interval",
+      "description": "Mean delay in seconds between automatic jumps."
+    }
+  }
+}
