@@ -1,0 +1,106 @@
+{
+  "title": "GIF Player",
+  "common": {
+    "apply": "Anwenden",
+    "cancel": "Abbrechen",
+    "command_failed": "GIF-Player-Befehl fehlgeschlagen",
+    "refresh": "Aktualisieren",
+    "save": "Speichern",
+    "settings": "Plugin-Einstellungen"
+  },
+  "picker": {
+    "title": "GIF-Picker",
+    "search": "GIFs suchen...",
+    "all_categories": "Alle Kategorien",
+    "loading": "GIF-Sammlung wird geladen...",
+    "empty": "Keine passenden GIFs gefunden.",
+    "catalog_failed": "GIF-Sammlung konnte nicht geladen werden.",
+    "profiles_failed": "Setups konnten nicht geladen werden.",
+    "launch_failed": "GIF konnte nicht gestartet werden.",
+    "setups": "Setups",
+    "profile_name": "Setup-Name",
+    "profile_save": "Aktuelles Setup speichern",
+    "profile_saved": "Setup gespeichert",
+    "profile_applied": "Setup angewendet",
+    "profile_overwritten": "Setup aktualisiert",
+    "profile_renamed": "Setup umbenannt",
+    "profile_deleted": "Setup gelöscht",
+    "profile_apply": "Anwenden",
+    "profile_overwrite": "Mit aktuellem Setup überschreiben",
+    "profile_rename": "Umbenennen",
+    "profile_delete": "Löschen"
+  },
+  "controls": {
+    "title": "Aktive GIFs",
+    "online": "Daemon online",
+    "offline": "Daemon offline",
+    "empty": "Keine GIF-Overlays aktiv.",
+    "open_picker": "Picker öffnen",
+    "edit_all": "Alle bearbeiten",
+    "lock_all": "Alle sperren",
+    "stop_all": "Alle beenden",
+    "locked": "durchklickbar",
+    "editing": "Bearbeitungsmodus",
+    "unlock": "Entsperren",
+    "lock": "Sperren",
+    "play": "Abspielen",
+    "pause": "Pause",
+    "close": "Overlay schließen",
+    "scale": "Größe",
+    "opacity": "Deckkraft",
+    "speed": "Tempo",
+    "jump_rate": "Sprungrate",
+    "bounce": "Bounce",
+    "stop_bounce": "Bounce stoppen",
+    "hop": "Hüpfen",
+    "auto_jump": "Auto-Jump",
+    "auto_jump_off": "Auto-Jump stoppen",
+    "flip_h": "Horizontal",
+    "flip_v": "Vertikal",
+    "reset": "Zurücksetzen",
+    "snap": "Ausrichten",
+    "center": "Mitte",
+    "position": "Position"
+  },
+  "settings": {
+    "gif_dir": {
+      "label": "GIF-Ordner",
+      "description": "Ordner mit der GIF-Sammlung. Leer lassen, um den XDG-Standardpfad von GIF Player zu verwenden."
+    },
+    "launch_scale": {
+      "label": "Standardgröße",
+      "description": "Skalierung für GIFs, die über den Noctalia-Picker gestartet werden."
+    },
+    "launch_opacity": {
+      "label": "Standarddeckkraft",
+      "description": "Deckkraft für GIFs, die über den Noctalia-Picker gestartet werden."
+    },
+    "launch_speed": {
+      "label": "Standardtempo",
+      "description": "Animationsgeschwindigkeit für GIFs, die über den Noctalia-Picker gestartet werden."
+    },
+    "launch_locked": {
+      "label": "Gesperrt starten",
+      "description": "Overlays durchklickbar starten, damit Mausereignisse die Fenster darunter erreichen."
+    },
+    "launch_bounce": {
+      "label": "Bounce beim Start",
+      "description": "Neu gestartete Overlays direkt im Bounce-Modus starten."
+    },
+    "launch_jump": {
+      "label": "Auto-Jump aktivieren",
+      "description": "Zufällige automatische Sprünge für neu gestartete Overlays aktivieren."
+    },
+    "launch_jump_rate": {
+      "label": "Auto-Jump-Intervall",
+      "description": "Mittlerer Abstand in Sekunden zwischen automatischen Sprüngen."
+    },
+    "glyph": {
+      "label": "Leisten-Symbol"
+    },
+    "show_count": {
+      "label": "Anzahl anzeigen",
+      "description": "Anzahl aktiver GIF-Overlays neben dem Leisten-Symbol anzeigen."
+    }
+  }
+}

@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from gif_player_bootstrap import LIBEXEC_DIR, configure_main, load_legacy, require_wayland
@@ -15,9 +17,15 @@ from gif_player_ipc import build_widget_cmd, daemon_send, ensure_daemon
 from gif_player_paths import AppPaths, get_paths
 
 KNOWN_COMMANDS = {
-    "run", "ipc", "all", "list", "edit", "lock", "stop-all", "kill-all",
-    "picker", "control", "daemon", "self-test", "doctor",
+    "run", "ipc", "all", "list", "watch", "catalog", "profiles",
+    "edit", "lock", "stop-all", "kill-all", "picker", "control", "daemon",
+    "self-test", "doctor",
 }
+
+PROFILE_KEYS = (
+    "x", "y", "scale", "opacity", "flip_h", "flip_v", "speed",
+    "bouncing", "jumping", "jump_rate",
+)
 
 
 def resolve_gif(value: str, gif_dir: Path) -> Path:
@@ -44,6 +52,169 @@ def resolve_gif(value: str, gif_dir: Path) -> Path:
     return matches[0]
 
 
+def _catalog(gif_dir: Path) -> list[dict[str, object]]:
+    if not gif_dir.is_dir():
+        return []
+    result: list[dict[str, object]] = []
+    for path in sorted(gif_dir.rglob("*"), key=lambda item: str(item).lower()):
+        if not path.is_file() or path.suffix.lower() != ".gif":
+            continue
+        resolved = path.resolve()
+        relative = path.relative_to(gif_dir)
+        try:
+            info = path.stat()
+            size = info.st_size
+            mtime_ns = info.st_mtime_ns
+        except OSError:
+            size = 0
+            mtime_ns = 0
+        result.append({
+            "name": path.stem,
+            "relative": str(relative),
+            "category": relative.parts[0] if len(relative.parts) > 1 else "",
+            "path": str(resolved),
+            "size": size,
+            "mtime_ns": mtime_ns,
+        })
+    return result
+
+
+class ProfileStore:
+    """Small compatibility store for the existing profiles.json format."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.lock_path = path.with_name(".profiles.lock")
+
+    def load(self) -> dict[str, dict]:
+        try:
+            if not self.path.exists():
+                return {}
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def write(self, profiles: dict[str, dict]) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self.lock_path.open("w", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(profiles, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, self.path)
+
+
+def _snapshot_widgets(paths: AppPaths) -> tuple[list[dict], str | None]:
+    response = daemon_send(paths, {"action": "list"})
+    if not response.get("ok"):
+        return [], str(response.get("error") or "Daemon läuft nicht")
+    widgets = []
+    for status in response.get("widgets", []):
+        if not isinstance(status, dict) or not status.get("file"):
+            continue
+        entry = {"gif": status["file"]}
+        for key in PROFILE_KEYS:
+            if key in status:
+                entry[key] = status[key]
+        widgets.append(entry)
+    return widgets, None
+
+
+def _profile_command(paths: AppPaths, args: argparse.Namespace) -> int:
+    store = ProfileStore(paths.profile_file)
+    profiles = store.load()
+    action = args.profile_action
+
+    if action == "list":
+        return _print_result({"ok": True, "profiles": profiles})
+
+    if action in {"save", "overwrite"}:
+        widgets, error = _snapshot_widgets(paths)
+        if error:
+            return _print_result({"error": error})
+        if not widgets:
+            return _print_result({"error": "Keine Widgets aktiv"})
+        if action == "save" and args.name in profiles:
+            return _print_result({"error": f"Profil '{args.name}' existiert bereits"})
+        profiles[args.name] = {"widgets": widgets}
+        store.write(profiles)
+        return _print_result({"ok": True, "name": args.name, "widgets": len(widgets)})
+
+    if action == "apply":
+        profile = profiles.get(args.name)
+        if not isinstance(profile, dict):
+            return _print_result({"error": f"Profil '{args.name}' nicht gefunden"})
+        widgets = profile.get("widgets", [])
+        if not isinstance(widgets, list):
+            return _print_result({"error": f"Profil '{args.name}' ist ungültig"})
+        return _print_result(daemon_send(
+            paths,
+            {"action": "apply-setup", "widgets": widgets},
+            timeout=15.0,
+        ))
+
+    if action == "rename":
+        if args.old not in profiles:
+            return _print_result({"error": f"Profil '{args.old}' nicht gefunden"})
+        if args.new in profiles:
+            return _print_result({"error": f"Profil '{args.new}' existiert bereits"})
+        profiles[args.new] = profiles.pop(args.old)
+        store.write(profiles)
+        return _print_result({"ok": True, "old": args.old, "name": args.new})
+
+    if action == "delete":
+        if args.name not in profiles:
+            return _print_result({"error": f"Profil '{args.name}' nicht gefunden"})
+        profiles.pop(args.name, None)
+        store.write(profiles)
+        return _print_result({"ok": True, "deleted": args.name})
+
+    return _print_result({"error": f"Unbekannte Profilaktion: {action}"})
+
+
+def _watch(paths: AppPaths, interval: float) -> int:
+    """Long-lived JSONL bridge for Noctalia.
+
+    This is a compatibility implementation for the migration branch. It keeps a
+    single process alive and only emits snapshots when state changes or on a
+    low-frequency heartbeat. The final native daemon will expose event-driven
+    subscription without polling, while preserving this CLI surface.
+    """
+
+    interval = max(0.25, min(float(interval), 10.0))
+    last_payload = ""
+    last_emit = 0.0
+    heartbeat = 5.0
+    try:
+        while True:
+            response = daemon_send(paths, {"action": "list"}, timeout=1.0)
+            if response.get("ok"):
+                payload = {
+                    "ok": True,
+                    "type": "snapshot",
+                    "widgets": response.get("widgets", []),
+                }
+            else:
+                payload = {
+                    "ok": False,
+                    "type": "offline",
+                    "widgets": [],
+                    "error": response.get("error", "Daemon läuft nicht"),
+                }
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            now = time.monotonic()
+            if encoded != last_payload or now - last_emit >= heartbeat:
+                print(encoded, flush=True)
+                last_payload = encoded
+                last_emit = now
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+
+
 def _extract_gif_dir(argv: list[str]) -> tuple[str | None, list[str]]:
     result: list[str] = []
     gif_dir: str | None = None
@@ -68,7 +239,7 @@ def _extract_gif_dir(argv: list[str]) -> tuple[str | None, list[str]]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gif-player",
-        description="GTK3-Wayland-GIF-Overlay mit Supervisor-Daemon und IPC v2",
+        description="Wayland-GIF-Overlay mit Supervisor-Daemon und IPC v2",
         epilog="Ohne Unterbefehl wird der Picker geöffnet. Ein GIF kann direkt per Name gestartet werden.",
     )
     parser.add_argument(
@@ -91,7 +262,24 @@ def _parser() -> argparse.ArgumentParser:
     all_parser = sub.add_parser("all", help="Befehl an alle Widgets senden")
     all_parser.add_argument("action_args", nargs="+")
 
-    sub.add_parser("list", help="Laufende Widget-IDs anzeigen")
+    list_parser = sub.add_parser("list", help="Laufende Widget-IDs anzeigen")
+    list_parser.add_argument("--json", action="store_true", help="vollständigen Daemon-Status als JSON ausgeben")
+
+    watch = sub.add_parser("watch", help="Statusänderungen als JSONL-Stream ausgeben")
+    watch.add_argument("--interval", type=float, default=1.0, help="Kompatibilitäts-Pollintervall in Sekunden")
+
+    sub.add_parser("catalog", help="GIF-Sammlung als JSON ausgeben")
+
+    profiles = sub.add_parser("profiles", help="Setups/Profile verwalten")
+    profile_sub = profiles.add_subparsers(dest="profile_action", required=True)
+    profile_sub.add_parser("list", help="Profile als JSON ausgeben")
+    for action in ("save", "overwrite", "apply", "delete"):
+        p = profile_sub.add_parser(action)
+        p.add_argument("name")
+    rename = profile_sub.add_parser("rename")
+    rename.add_argument("old")
+    rename.add_argument("new")
+
     sub.add_parser("edit", help="Alle Widgets entsperren")
     sub.add_parser("lock", help="Alle Widgets sperren")
     sub.add_parser("stop-all", aliases=["kill-all"], help="Alle Widgets beenden")
@@ -99,7 +287,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("control", help="Control-Panel öffnen")
     sub.add_parser("daemon", help="Supervisor-Daemon (intern/manuell)")
     sub.add_parser("self-test", help="XDG-Pfade und Runtime-Sicherheit prüfen")
-    sub.add_parser("doctor", help="Python-Abhängigkeiten und GTK-Typelibs prüfen")
+    sub.add_parser("doctor", help="Runtime-Abhängigkeiten prüfen")
     return parser
 
 
@@ -201,6 +389,13 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test(paths)
     if args.command == "doctor":
         return _doctor(paths)
+    if args.command == "catalog":
+        print(json.dumps({"ok": True, "gif_dir": str(paths.gif_dir), "gifs": _catalog(paths.gif_dir)}, ensure_ascii=False))
+        return 0
+    if args.command == "profiles":
+        return _profile_command(paths, args)
+    if args.command == "watch":
+        return _watch(paths, args.interval)
     if args.command == "daemon":
         return _run_daemon(paths)
     if args.command == "picker":
@@ -251,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         response = daemon_send(paths, {"action": "list"})
+        if args.json:
+            return _print_result(response)
         if not response.get("ok"):
             return 0
         for status in response.get("widgets", []):

@@ -1,0 +1,106 @@
+{
+  "title": "GIF Player",
+  "common": {
+    "apply": "Apply",
+    "cancel": "Cancel",
+    "command_failed": "GIF Player command failed",
+    "refresh": "Refresh",
+    "save": "Save",
+    "settings": "Plugin settings"
+  },
+  "picker": {
+    "title": "GIF Picker",
+    "search": "Search GIFs...",
+    "all_categories": "All categories",
+    "loading": "Loading GIF collection...",
+    "empty": "No matching GIFs found.",
+    "catalog_failed": "Could not load the GIF collection.",
+    "profiles_failed": "Could not load setups.",
+    "launch_failed": "Could not start the GIF.",
+    "setups": "Setups",
+    "profile_name": "Setup name",
+    "profile_save": "Save current setup",
+    "profile_saved": "Setup saved",
+    "profile_applied": "Setup applied",
+    "profile_overwritten": "Setup updated",
+    "profile_renamed": "Setup renamed",
+    "profile_deleted": "Setup deleted",
+    "profile_apply": "Apply",
+    "profile_overwrite": "Overwrite with current setup",
+    "profile_rename": "Rename",
+    "profile_delete": "Delete"
+  },
+  "controls": {
+    "title": "Active GIFs",
+    "online": "Daemon online",
+    "offline": "Daemon offline",
+    "empty": "No GIF overlays are running.",
+    "open_picker": "Open picker",
+    "edit_all": "Edit all",
+    "lock_all": "Lock all",
+    "stop_all": "Stop all",
+    "locked": "click-through",
+    "editing": "edit mode",
+    "unlock": "Unlock",
+    "lock": "Lock",
+    "play": "Play",
+    "pause": "Pause",
+    "close": "Close overlay",
+    "scale": "Scale",
+    "opacity": "Opacity",
+    "speed": "Speed",
+    "jump_rate": "Jump rate",
+    "bounce": "Bounce",
+    "stop_bounce": "Stop bounce",
+    "hop": "Hop",
+    "auto_jump": "Auto jump",
+    "auto_jump_off": "Stop auto jump",
+    "flip_h": "Flip H",
+    "flip_v": "Flip V",
+    "reset": "Reset",
+    "snap": "Snap",
+    "center": "Center",
+    "position": "Position"
+  },
+  "settings": {
+    "gif_dir": {
+      "label": "GIF folder",
+      "description": "Folder containing the GIF collection. Leave empty to use the GIF Player XDG default."
+    },
+    "launch_scale": {
+      "label": "Default scale",
+      "description": "Scale applied when starting a GIF from the Noctalia picker."
+    },
+    "launch_opacity": {
+      "label": "Default opacity",
+      "description": "Opacity applied when starting a GIF from the Noctalia picker."
+    },
+    "launch_speed": {
+      "label": "Default speed",
+      "description": "Animation speed applied when starting a GIF from the Noctalia picker."
+    },
+    "launch_locked": {
+      "label": "Start locked",
+      "description": "Start overlays click-through so pointer input reaches windows underneath."
+    },
+    "launch_bounce": {
+      "label": "Start bouncing",
+      "description": "Start newly launched overlays in bounce mode."
+    },
+    "launch_jump": {
+      "label": "Enable auto jump",
+      "description": "Enable random automatic jumps for newly launched overlays."
+    },
+    "launch_jump_rate": {
+      "label": "Auto jump interval",
+      "description": "Mean delay in seconds between automatic jumps."
+    },
+    "glyph": {
+      "label": "Bar icon"
+    },
+    "show_count": {
+      "label": "Show active count",
+      "description": "Show the number of active GIF overlays next to the bar icon."
+    }
+  }
+}

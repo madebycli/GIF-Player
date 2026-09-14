@@ -43,6 +43,22 @@ jobs:
           PYTHONPATH=. python gif_player_cli.py --help >/dev/null
           python -m build --wheel --no-isolation
 
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Check native renderer prototype
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cargo test --manifest-path renderer/Cargo.toml --all-targets
+          cargo clippy --manifest-path renderer/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path renderer/Cargo.toml --check
+
   nix:
     runs-on: ubuntu-latest
     timeout-minutes: 90
