@@ -1,13 +1,13 @@
 id = "madebycli/gif-player"
 name = "GIF Player"
-version = "0.1.0"
-plugin_api = 24
+version = "0.2.0"
+plugin_api = 28
 author = "madebycli"
 license = "Proprietary"
-dependencies = []
+dependencies = ["gif-player"]
 tags = ["animation", "desktop", "media", "utility"]
 icon = "photo"
-description = "Control click-through animated GIF overlays directly from Noctalia."
+description = "Browse and control native click-through GIF overlays from Noctalia."
 
 [[setting]]
 key = "gif_dir"
@@ -22,6 +22,9 @@ type = "double"
 label_key = "settings.launch_scale.label"
 description_key = "settings.launch_scale.description"
 default = 0.7
+min = 0.1
+max = 5.0
+step = 0.05
 
 [[setting]]
 key = "launch_opacity"
@@ -29,6 +32,9 @@ type = "double"
 label_key = "settings.launch_opacity.label"
 description_key = "settings.launch_opacity.description"
 default = 1.0
+min = 0.05
+max = 1.0
+step = 0.05
 
 [[setting]]
 key = "launch_speed"
@@ -36,6 +42,9 @@ type = "double"
 label_key = "settings.launch_speed.label"
 description_key = "settings.launch_speed.description"
 default = 1.0
+min = 0.1
+max = 10.0
+step = 0.1
 
 [[setting]]
 key = "launch_locked"
@@ -64,18 +73,45 @@ type = "double"
 label_key = "settings.launch_jump_rate.label"
 description_key = "settings.launch_jump_rate.description"
 default = 6.0
+min = 0.5
+max = 60.0
+step = 0.5
+
+[[service]]
+id = "bridge"
+entry = "service.luau"
+
+[[panel]]
+id = "picker"
+entry = "picker.luau"
+width = 920
+height = 780
+placement = "attached"
+position = "auto"
+open_near_click = true
+
+[[panel]]
+id = "controls"
+entry = "controls.luau"
+width = 760
+height = 720
+placement = "attached"
+position = "auto"
+open_near_click = true
 
 [[widget]]
 id = "gif-player"
 entry = "widget.luau"
 
-[widget.actions]
-middle = "none"
+  [[widget.setting]]
+  key = "glyph"
+  type = "glyph"
+  label_key = "settings.glyph.label"
+  default = "photo"
 
-[[panel]]
-id = "manager"
-entry = "panel.luau"
-width = 760
-height = 720
-placement = "attached"
-position = "auto"
+  [[widget.setting]]
+  key = "show_count"
+  type = "bool"
+  label_key = "settings.show_count.label"
+  description_key = "settings.show_count.description"
+  default = true
