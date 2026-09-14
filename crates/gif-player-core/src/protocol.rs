@@ -53,10 +53,9 @@ mod tests {
 
     #[test]
     fn legacy_shape_deserializes_without_rejecting_extra_widget_fields() {
-        let request: Request = serde_json::from_str(
-            r#"{"action":"move","id":"cat","x":120,"y":240}"#,
-        )
-        .expect("request should parse");
+        let request: Request =
+            serde_json::from_str(r#"{"action":"move","id":"cat","x":120,"y":240}"#)
+                .expect("request should parse");
         assert_eq!(request.action(), "move");
         assert_eq!(request.id.as_deref(), Some("cat"));
         assert_eq!(request.extra.get("x").and_then(Value::as_i64), Some(120));
