@@ -1,4 +1,7 @@
 use crate::model::PlayerState;
+use anyhow::{anyhow, Result};
+use smithay_client_toolkit::compositor::{CompositorState, Region};
+use wayland_client::protocol::wl_surface::WlSurface;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -53,6 +56,35 @@ pub fn input_region_mode(
     })
 }
 
+/// Apply a wl_surface input region without requiring application code to dispatch
+/// wl_region objects itself. `InputRegionMode::Empty` intentionally adds no
+/// rectangles, which makes the committed surface fully pointer/touch transparent.
+pub fn apply_input_region(
+    compositor: &CompositorState,
+    surface: &WlSurface,
+    mode: InputRegionMode,
+) -> Result<()> {
+    let region = Region::new(compositor)
+        .map_err(|error| anyhow!("create Wayland input region: {error:?}"))?;
+    match mode {
+        InputRegionMode::Empty => {}
+        InputRegionMode::Gif(rect) => region.add(
+            rect.x,
+            rect.y,
+            rect.width.min(i32::MAX as u32) as i32,
+            rect.height.min(i32::MAX as u32) as i32,
+        ),
+        InputRegionMode::FullSurface { width, height } => region.add(
+            0,
+            0,
+            width.min(i32::MAX as u32) as i32,
+            height.min(i32::MAX as u32) as i32,
+        ),
+    }
+    surface.set_input_region(Some(region.wl_region()));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,19 +100,35 @@ mod tests {
 
     #[test]
     fn unlocked_drag_uses_full_surface() {
-        let state = PlayerState { locked: false, ..PlayerState::default() };
+        let state = PlayerState {
+            locked: false,
+            ..PlayerState::default()
+        };
         assert_eq!(
             input_region_mode(&state, true, true, 100, 100, 1920, 1080, 0.0, 8),
-            InputRegionMode::FullSurface { width: 1920, height: 1080 }
+            InputRegionMode::FullSurface {
+                width: 1920,
+                height: 1080
+            }
         );
     }
 
     #[test]
     fn unlocked_canvas_exposes_only_gif_rect() {
-        let state = PlayerState { x: 100.0, y: 200.0, locked: false, ..PlayerState::default() };
+        let state = PlayerState {
+            x: 100.0,
+            y: 200.0,
+            locked: false,
+            ..PlayerState::default()
+        };
         assert_eq!(
             input_region_mode(&state, true, false, 80, 40, 1920, 1080, 10.0, 8),
-            InputRegionMode::Gif(Rect { x: 92, y: 182, width: 96, height: 56 })
+            InputRegionMode::Gif(Rect {
+                x: 92,
+                y: 182,
+                width: 96,
+                height: 56
+            })
         );
     }
 }
