@@ -89,6 +89,7 @@ height = 780
 placement = "attached"
 position = "auto"
 open_near_click = true
+keyboard_focus = "exclusive"
 
 [[panel]]
 id = "controls"
