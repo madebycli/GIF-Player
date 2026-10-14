@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=GIF Player Picker
+Name=Noctalia GIF Player
+Name[de]=Noctalia GIF Player
 Comment=Choose and start GIF overlays
-Exec=gif-picker
+Exec=gif-player picker
 Terminal=false
 Categories=Utility;Graphics;

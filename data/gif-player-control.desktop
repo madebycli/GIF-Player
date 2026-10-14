@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=GIF Player Control
+Name=Noctalia GIF Player Controls
+Name[de]=Noctalia GIF Player Steuerung
 Comment=Control running GIF overlays
-Exec=gif-control
+Exec=gif-player control
 Terminal=false
 Categories=Utility;Graphics;

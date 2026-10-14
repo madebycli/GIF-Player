@@ -1,0 +1,52 @@
+id = "madebycli/gif-player"
+name = "Noctalia GIF Player"
+version = "1.0.0"
+plugin_api = 30
+author = "madebycli"
+license = "LicenseRef-All-Rights-Reserved"
+description = "Native Rust GIF overlays with shared playback controls, layouts and a floating collection picker."
+icon = "movie"
+tags = ["desktop", "animation", "gif", "wayland"]
+dependencies = ["gif-player"]
+
+[[setting]]
+key = "executable"
+type = "string"
+label_key = "settings.executable"
+default = "gif-player"
+
+[[setting]]
+key = "directory"
+type = "folder"
+label_key = "settings.directory"
+default = ""
+
+[[service]]
+id = "service"
+entry = "service.luau"
+
+[[widget]]
+id = "player"
+entry = "bar.luau"
+
+[[panel]]
+id = "control"
+entry = "control.luau"
+width = 740
+height = 760
+placement = "attached"
+position = "auto"
+layer = "overlay"
+
+[[panel]]
+id = "picker"
+entry = "picker.luau"
+width = 900
+height = 780
+placement = "floating"
+position = "center"
+layer = "overlay"
+
+[[shortcut]]
+id = "launcher"
+entry = "shortcut.luau"

@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "compositor": "Sway",
+  "checks": [
+    "fullscreen overlay",
+    "locked GIF click-through",
+    "locked transparent canvas",
+    "keyboard and scroll pass-through",
+    "edit-region isolation",
+    "drag",
+    "offscreen",
+    "two outputs",
+    "fractional scale",
+    "standalone UI interaction",
+    "output removal"
+  ]
+}

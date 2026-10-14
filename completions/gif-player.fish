@@ -1,7 +1,16 @@
 complete -c gif-player -f
 complete -c gif-player -l gif-dir -r -d 'GIF-Verzeichnis'
-complete -c gif-player -n '__fish_use_subcommand' -a 'run ipc all list edit lock stop-all kill-all picker control daemon' -d 'GIF Player Befehl'
-complete -c gif-player -n '__fish_seen_subcommand_from run' -l id -r -d 'Explizite Widget-ID'
+complete -c gif-player -n '__fish_use_subcommand' -a 'run ipc all list edit lock stop-all kill-all picker control daemon doctor self-test request watch library catalog profile profiles bench preview install-plugin quit-daemon' -d 'Noctalia GIF Player Befehl'
+complete -c gif-player -n '__fish_seen_subcommand_from run' -l id -r -d 'Widget-ID'
 complete -c gif-player -n '__fish_seen_subcommand_from run' -l monitor -r -d 'Monitorindex'
+complete -c gif-player -n '__fish_seen_subcommand_from run' -l output -r -d 'Wayland-Ausgang'
 complete -c gif-player -n '__fish_seen_subcommand_from run' -l state -r -d 'Startzustand als JSON'
+complete -c gif-player -n '__fish_seen_subcommand_from picker control' -l standalone -d 'Rust-Oberfläche'
+complete -c gif-player -n '__fish_seen_subcommand_from list' -l json -d 'JSON-Ausgabe'
+complete -c gif-player -n '__fish_seen_subcommand_from daemon' -l stay -d 'Daemon aktiv halten'
+complete -c gif-player -n '__fish_seen_subcommand_from daemon' -l no-restore -d 'Sitzung nicht wiederherstellen'
+complete -c gif-player -n '__fish_seen_subcommand_from doctor' -l offline -d 'Ohne Wayland-Prüfung'
+complete -c gif-player -n '__fish_seen_subcommand_from watch' -l reconnect -d 'Automatisch verbinden'
+complete -c gif-player -n '__fish_seen_subcommand_from profile profiles' -a 'list save apply delete rename'
+complete -c gif-player -n '__fish_seen_subcommand_from all ipc' -a 'status lock unlock toggle pause play resume reset quit move move-by scale opacity speed flip corner center bounce stop-bounce hop jump jump-rate show hide visibility canvas layer output'
 complete -c gif -w gif-player

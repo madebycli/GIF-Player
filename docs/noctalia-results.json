@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-14",
+  "host": "Noctalia 5.2.1, upstream Nixpkgs binary; upstream source also compiled unchanged",
+  "plugin_api": 30,
+  "compositor": "Sway 1.10.1 headless pixman / software Mesa EGL",
+  "manifest_lint": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "verified": [
+    "native service and bar loaded",
+    "attached native control opened",
+    "control Pause button changed daemon status to paused:true",
+    "independent floating picker opened",
+    "picker Add button started a second widget in the real daemon",
+    "Rust-generated PNG hover preview manifest exists",
+    "all plugin Luau modules compile"
+  ],
+  "limits": [
+    "Mango runtime unavailable without /dev/dri",
+    "Noctalia host tested on Sway; hardware font/display appearance can differ"
+  ]
+}

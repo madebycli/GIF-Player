@@ -1,0 +1,47 @@
+{
+  "rust": {
+    "label": "Rust; same 3 GIFs, 512x512, 20 FPS, scale 0.7, DPI 1",
+    "pid": 26551,
+    "seconds": 60.00055197999973,
+    "cpu_percent_one_core": 4.48329208854057,
+    "initial_rss_mib": 82.43359375,
+    "final_rss_mib": 82.43359375,
+    "peak_rss_mib": 82.43359375
+  },
+  "python": {
+    "label": "Python stable; 3x512x512, 24 frames, 20 FPS, scale 0.7, DPI 1",
+    "pid": 26444,
+    "seconds": 60.00046963299974,
+    "cpu_percent_one_core": 27.183120565159108,
+    "initial_rss_mib": 128.4140625,
+    "final_rss_mib": 128.421875,
+    "peak_rss_mib": 129.40625
+  },
+  "rust_paused": {
+    "label": "Rust; paused baseline, 3 widgets",
+    "pid": 26551,
+    "seconds": 20.000789175000136,
+    "cpu_percent_one_core": 0.0,
+    "initial_rss_mib": 82.43359375,
+    "final_rss_mib": 82.43359375,
+    "peak_rss_mib": 82.43359375
+  },
+  "rust_empty": {
+    "label": "Rust; no widgets, daemon --stay",
+    "pid": 26551,
+    "seconds": 10.000505857999997,
+    "cpu_percent_one_core": 0.0,
+    "initial_rss_mib": 4.61328125,
+    "final_rss_mib": 4.61328125,
+    "peak_rss_mib": 4.61328125
+  },
+  "environment": {
+    "os": "Debian 13",
+    "compositor": "Sway 1.10.1 headless pixman",
+    "output": "HEADLESS-1 1280x720 scale 1",
+    "workload": "3 separate synthetic 512x512 GIFs, 24 frames, 50ms delays, scale 0.7, visible, no effects",
+    "method": "warm processes measured sequentially; /proc process CPU and RSS; one-core CPU percentage",
+    "date": "2026-10-14",
+    "limitations": "No GPU, hardware power meter, Mango runtime or universal workload claim"
+  }
+}

@@ -1,156 +1,33 @@
-# GIF Player – Architektur (GTK3, Supervisor, IPC v2)
+# Architecture
 
-## Komponenten
+The application is one Rust executable. A daemon owns the Wayland connection, widgets, playback clocks, configuration and Unix socket. A single bounded decoder worker handles media loading; playback does not start a process per GIF. The optional Noctalia frontend is a thin Luau plugin. The core has no dependency on a Noctalia runtime or design state.
 
-```text
-gif-player / gif-picker / gif-control
-                  │
-                  ├── XDG- und Bootstrap-Schicht
-                  │   (gif_player_paths.py, gif_player_bootstrap.py)
-                  │
-                  ├── testbare Player-Logik
-                  │   (gif_player_runtime.py)
-                  │
-                  └── gif-script.py daemon
-                        ├── Gio.SocketService, JSON-Protokoll v2
-                        ├── WidgetManager
-                        ├── WidgetWindow × N (GTK3 + GtkLayerShell)
-                        └── FrameStoreRegistry (Pillow → Cairo)
-```
+## Core and memory
 
-Die Rendering- und Animationsimplementierung bleibt GTK3-basiert. Ein einziger
-Daemon verwaltet alle Layer-Shell-Fenster. Mehrere Instanzen desselben GIFs
-teilen weiterhin einen dekodierten Frame-Satz.
+`decode.rs` materializes GIF delta frames using palettes, transparency and disposal before resampling and premultiplying RGBA. Logical media dimensions are capped at 512 pixels on the longest axis, matching the old player; budget resampling preserves that logical geometry and every frame's duration. The clock uses absolute elapsed time and binary-searches a cumulative timeline, so late presentation skips directly to the current frame rather than accumulating drift. Zero delays become 100 ms; nonzero delays are at least 20 ms.
 
-`gif_player_runtime.py` enthält reine, displayfreie Logik für GIF-Dauern,
-Disposal-sichere RGBA-Kopien, Cairo-Premultiplication, absolute Frame-Deadlines,
-Jump-Kurven, freie Positionen und Bounce-Reflexion. Die Bootstrap-Schicht
-installiert gezielte Laufzeitkorrekturen auf der geladenen GTK-Implementierung.
-Die Supervisor- und IPC-Architektur wird dadurch nicht ersetzt.
+Decoded frames are shared by canonical source path with `Arc`. The global charged playback cache is bounded at 240 MiB, with 16 MiB reserved for first-frame thumbnails; per-asset playback reservations are at most 32 MiB. Those limits cover decoded cache data, not total process RSS: source/disposal canvases, fonts, compositor buffers and temporary resampling allocations are additional. Inputs are limited to 16 megapixel canvases, 256 MiB files, 100,000 frames and 256 active widgets. A bounded 32-job channel rejects overload cleanly. Stopped assets are cancelled, generation tokens reject obsolete decode results, and unused caches are freed. Frames are never silently dropped to fit a budget.
 
-## Installierte Programme
+## Rendering
 
-- `gif-player`: shellunabhängiges Haupt-CLI und Daemon-Bootstrap.
-- `gif-picker`: grafischer Picker.
-- `gif-control`: Live-Control-Panel.
-- `gif`: optionale Fish-Funktion, die nur `gif-player` aufruft.
+`wayland.rs` uses SCTK and wayland-client directly. Pixels are premultiplied native-endian ARGB8888 in `wl_shm`. Locked stationary widgets use compact, clipped layer surfaces. Editing, bounce, hop and explicitly selected fullscreen canvas use one transparent output canvas per layer. Each surface has two reusable SHM slots. Damage is the union of changed old/new rectangles; only damaged rows are cleared, then intersecting items are composited. Integer nearest-neighbor sampling avoids division in the hot pixel loop. No GPU runtime is required by the player.
 
-Die Python-Dateien liegen im Nix-Paket unter `libexec/gif-player`. Interne
-Starts verwenden bevorzugt die verpackten Programme unter `$out/bin`, damit
-die GTK-/GI-Wrapper-Umgebung erhalten bleibt. Das aktuelle Arbeitsverzeichnis
-und globale Python-Installationen sind irrelevant.
+Surfaces have exclusive zone -1, default Overlay layer and keyboard interactivity None. Locked input regions are empty. Editable canvases contain the union of unlocked GIF rectangles, never the entire transparent screen. Input-region commits are independent of frame callbacks, so locking does not wait for a visible animation frame. Replacement surfaces retain the preceding visible surface until their first buffer commits. Position, buffer, viewport and scale changes commit together. Output names, logical geometry, integer scale and optional fractional-scale/viewporter are tracked; the compositor retains ultimate stacking and session-lock authority.
 
-## Player-Pipeline
+A single poll loop combines Wayland, IPC, decoder notifications, precise frame/effect deadlines, persistence deadlines and peer timeouts. Frame callbacks gate presentation. Hidden, paused and offscreen animations do not cause continuous redraws. Bounce and hop are elapsed-time effects; paused media can still move. A four-Hz status notification ceiling avoids flooding frontends during motion.
 
-```text
-GIF path
-  → FrameStoreRegistry.acquire(realpath)
-  → Pillow decode thread
-  → seek + composited RGBA copy
-  → optional one-time resize
-  → premultiplied BGRA bytearray
-  → Cairo ImageSurface
-  → shared FrameStore
-  → monotonic absolute frame deadline
-  → one queued GTK draw for newest due frame
-  → Cairo clear + transform + paint in one callback
-  → GtkLayerShell surface commit
-```
+## Frontends
 
-Der Buffer jeder Cairo-Surface bleibt so lange wie die Surface in der Registry
-gespeichert. Append und Read von Surface und Dauer verwenden denselben Lock.
-Das erste Frame darf bereits laufen, während spätere Frames dekodiert werden.
-Erreicht die Wiedergabe das Decoder-Ende, wird das letzte gültige Frame gehalten.
+`ui.rs` renders the independent Rust control surface through tiny-skia/fontdue and system fonts. It loads and retains fonts only while open, provides collection, active widgets, profiles and settings, and handles bounded thumbnails and on-demand hover animation. It uses its own carefully designed surface; it is not represented as a native Noctalia component.
 
-## Timing
+`plugins/gif-player` uses the actual Noctalia 5 API 30: native `ui.*` widgets, host panels, translations, color roles and settings. One reconnecting `gif-player watch --frontend` process streams daemon snapshots. User actions use bounded argv-based `runAsync` requests. Slider commands coalesce; plugin snapshots share selection and state between the attached control panel and independent floating picker. Preview PNGs are produced by Rust and displayed by the host. Frame ticks run only during hover animation. Right-click edit requests use a frontend-neutral event/ack contract; when no managed frontend is connected, the Rust UI opens.
 
-GIF-Frames verwenden absolute monotone Deadlines. Unter normaler Last wird genau
-ein Frame pro Deadline weitergeschaltet. Bei einer blockierten Main Loop werden
-überfällige Dauern auf der Zeitachse berücksichtigt, aber nur das neueste fällige
-Frame gezeichnet. Der Catch-up ist begrenzt; extreme Verzögerungen werden einmal
-neu basiert, statt eine Folge von 0-ms-Callbacks zu erzeugen.
+The CLI prefers an installed, running Noctalia panel and falls back to the standalone surface. Renderer code does not spawn Noctalia. The plugin is embedded in the executable for installation and is also distributed separately.
 
-Jump und Bounce verwenden die GTK-Frame-Clock. Jump-Fortschritt wird aus der
-absoluten Frame-Clock-Zeit berechnet. Bounce bleibt `dt`-basiert und reflektiert
-mit einer robusten modulo-basierten Dreiecksfunktion.
+## Persistence and IPC
 
-## Koordinaten und Surface-Modi
+State and profile object shapes and IPC protocol 2 remain compatible with the old implementation. Unknown state fields are flattened and retained. Original migration files remain unchanged and are backed up before importing. JSON writes use exclusive temporary files, file fsync, rename and parent-directory fsync. Session data records every active ID and output; profiles validate their entire layout before replacing it.
 
-Positionen sind monitorlokale logische GTK-Koordinaten.
+IPC is newline-delimited JSON, with up to 128 nonblocking peers, a 1 MiB request bound, 5-second incomplete-request timeout and 10-second backpressure timeout. Snapshot streams coalesce pending updates. Runtime paths reject unsafe ownership/symlinks, daemon exclusivity uses flock and sockets are user-only. No TCP endpoint or shell interpolation is used.
 
-```text
-base_x/base_y       gespeicherte freie Position
-bounce_x/bounce_y   temporäre sichtbare Bounce-Position
-jump_offset_y       temporärer Jump-Offset
-draw_x              aktive Basis-X
-draw_y              aktive Basis-Y - jump_offset_y
-```
-
-Manuelle Positionen werden nicht an Monitorgrenzen geklemmt. Negative Werte und
-vollständig außerhalb liegende Positionen sind erlaubt.
-
-Surface-Zustände:
-
-- `compact`: GIF-große Surface; Layer-Shell-Margins tragen die Position.
-- `to-canvas`: Surface wächst vom bisherigen top-left Punkt; das GIF bleibt bei
-  `(0, 0)` und damit auf exakt denselben globalen Pixeln.
-- `canvas`: monitorfüllende Surface; die GIF-Basisposition ist der Draw-Offset.
-- `to-compact`: umgekehrter positionsgleicher Übergang.
-
-Ein gesperrtes GIF darf nur dann kompakt werden, wenn sein komplettes skaliertes
-Rechteck im Monitor liegt. Teilweise oder vollständig außerhalb liegende
-Widgets bleiben als durchklickbare Canvas-Surface erhalten, weil negative oder
-außerhalb liegende Layer-Shell-Margins compositorübergreifend nicht zuverlässig
-sind.
-
-Dragging verändert weiterhin nur den Draw-Offset innerhalb der stabilen Canvas-
-Surface. Die Wayland-Surface wird während des Pointer-Drags nicht verschoben.
-
-Bounce besitzt eigene Bounds. Bei einem auf einer Achse zu großen GIF wird diese
-Achse zentriert und ihre Geschwindigkeit auf null gesetzt; die andere Achse kann
-weiter bouncen.
-
-## XDG-Pfade
-
-| Inhalt | Pfad |
-|---|---|
-| Socket, Lock, Log | `$XDG_RUNTIME_DIR/gif-player`, Fallback `/tmp/gif-player-$UID` |
-| Zustand und Profile | `$XDG_CONFIG_HOME/gif-player` |
-| Thumbnail-Cache | `$XDG_CACHE_HOME/gif-player/thumbs` |
-| GIFs | `$XDG_DATA_HOME/gif-player/gifs` |
-
-Das Runtime-Verzeichnis wird auf `0700`, der Socket auf höchstens `0600`
-gesetzt. Der alte Ordner `~/Scripts/Gif-Overlay/Gifs` wird nur erkannt, wenn er
-bereits existiert und der XDG-GIF-Ordner noch nicht vorhanden ist; er wird nie
-angelegt.
-
-## Protokoll v2
-
-Eine Anfrage und eine Antwort bestehen jeweils aus genau einer JSON-Zeile.
-
-```text
-Daemon: ping, list, spawn, stop-all, apply-setup, quit-daemon
-Widget: status, lock, unlock, toggle, pause, play, move, move-by, scale,
-        corner, opacity, flip, speed, bounce, stop-bounce, hop, jump,
-        jump-rate, reset, quit
-```
-
-Statusantworten dürfen zusätzliche Felder wie `base_position` und
-`surface_mode` enthalten. Vorhandene Felder und Aktionen bleiben kompatibel.
-
-## Diagnose
-
-```console
-GIF_PLAYER_DEBUG_TIMING=1 gif-player daemon
-```
-
-Aktiviert monotone JSON-Ereignisse für Surface-Übergänge, `size-allocate`,
-Jump-Fortschritt, Draws, Damage, Frame-Catch-up und Bounce. Ohne die Variable ist
-die detaillierte Instrumentierung deaktiviert.
-
-## Display-Anforderung
-
-Overlay, Picker und Control benötigen eine Wayland-Sitzung und einen Compositor
-mit Layer-Shell-Unterstützung, beispielsweise Niri, Sway, Hyprland oder Wayfire.
-CLI-Hilfe, Pfadtests, Syntaxprüfungen, GIF-Pixeltests und IPC-Unit-Tests benötigen
-kein Display.
+The preserved Python branch permits regression comparison and rollback. Technical evidence lives in this repository; project context and handoff records live exclusively in `madebycli/master-context`.
