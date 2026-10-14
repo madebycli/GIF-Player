@@ -150,6 +150,12 @@ fn load_frames(
             }
             Err(e) => return Err(e.into()),
         };
+        crate::diag!(
+            Trace,
+            "decoder",
+            "frame_decoded",
+            serde_json::json!({"path":path,"index":frames.len(),"canvas":[sw,sh],"rect":[frame.left,frame.top,frame.width,frame.height],"delay_centiseconds":frame.delay,"playback_delay_ms":duration(frame.delay),"disposal":format!("{:?}",frame.dispose),"transparent_index":frame.transparent,"local_palette":frame.palette.is_some(),"sampled_size":[width,height]})
+        );
         ensure!(frames.len() < 100_000, "GIF has more than 100,000 frames");
         if frames.is_empty() && frame.transparent.is_none() {
             for pixel in canvas.chunks_exact_mut(4) {
@@ -203,6 +209,12 @@ fn load_frames(
         if backing.is_none()
             && (frames.len() + 1) * (frame_bytes + std::mem::size_of::<Frame>() + 8) > budget
         {
+            crate::diag!(
+                Debug,
+                "decoder",
+                "lossless_backing_required",
+                serde_json::json!({"path":path,"frames":frames.len(),"frame_bytes":frame_bytes,"budget_bytes":budget})
+            );
             let directory = spool_dir
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| crate::paths::Paths::new(None).cache_dir.join("frames"));

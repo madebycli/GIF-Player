@@ -53,5 +53,7 @@
   "doctor": "Diagnostics",
   "starter": "Playback",
   "app": "Open app",
-  "duplicate": "Duplicate GIF"
+  "duplicate": "Duplicate GIF",
+  "logs_level": "Logs",
+  "logs_export": "Export logs"
 }

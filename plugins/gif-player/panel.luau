@@ -216,6 +216,8 @@ return function(initialTab, source)
         return ui.column({ gap = 12 }, nodes)
     end
     local function settings()
+        local level = snapshot.logging and snapshot.logging.level or "info"
+        local nextLevel = level == "info" and "debug" or level == "debug" and "trace" or level == "trace" and "off" or "info"
         return ui.column({gap = 16}, {
             ui.row({gap = 12, align = "center", fill = "surface_variant", radius = 10, border = "outline", borderWidth = 1, padding = 12}, {
                 ui.label({text = tr("restore"), flexGrow = 1, maxLines = 2}),
@@ -230,6 +232,15 @@ return function(initialTab, source)
                 button(tr("start_daemon"), "player-play", function() nonce += 1; noctalia.state.set("start", source .. tostring(nonce)) end),
                 button(tr("quit_daemon"), "power", function() send({action = "quit-daemon"}) end),
                 button(tr("doctor"), "stethoscope", function() noctalia.runAsync({noctalia.getConfig("executable"), "doctor"}, function(result) noctalia.notify(tr("title"), result and (result.stdout ~= "" and result.stdout or result.stderr) or tr("missing_engine")) end) end),
+            }),
+            ui.row({gap = 8}, {
+                button(tr("logs_level") .. ": " .. level, "list-details", function() send({action = "logs-level", level = nextLevel}) end),
+                button(tr("logs_export"), "folder", function()
+                    noctalia.runAsync({noctalia.getConfig("executable"), "logs", "export"}, function(result)
+                        local data = result and noctalia.json.decode(result.stdout or "")
+                        noctalia.notify(tr("title"), data and (data.error or data.directory) or result and result.stderr or tr("missing_engine"))
+                    end, 40000)
+                end),
             }),
         })
     end

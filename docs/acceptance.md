@@ -10,8 +10,8 @@ The Python implementation at `786e6fe1baf0ef31380bdd5e60c318f5aa3cb095` is retai
 | GIF composition | generated GIFs exercise transparent deltas, local palettes, disposal Background/Previous, precise normalized delays, long-time timeline lookup, native pixels above 512 under cache pressure, lossless backing with intact timing, cancellation and truncated prefix warnings |
 | IPC v2 | genuine headless daemon and Unix clients exercise legacy actions, wildcards, independent IDs/shared frames, quoted/Unicode paths, partial slow clients and unsafe runtime symlinks |
 | Persistence | old state/profile shapes, unknown fields, byte-preserving migration backup, profile layout validation and atomic file replacement |
-| Sway 1.10.1 | fourteen real Wayland acceptance checks described below; no fake compositor or mocked input |
-| Noctalia 5.2.1 | unmodified host loaded native service, bar widget, attached control panel and floating picker; native UI screenshot inspected; real Pause and Add clicks change daemon state; official plugin lint: 0 errors, 0 warnings; Luau bytecode compiler accepts all entries |
+| Sway 1.10.1 | fifteen real Wayland acceptance checks described below; no fake compositor or mocked input |
+| Noctalia 5.2.1 | unmodified host loaded native service, bar widget, attached control panel and floating picker; native UI screenshot inspected; real playback and image-toggle clicks change daemon state; official plugin lint: 0 errors, 0 warnings; Luau bytecode compiler accepts all entries |
 | Nix x86_64 | locked package build and flake checks, CLI, native runtime closure and native Noctalia manifest lint |
 | Installation | staged Make/Cargo installation and embedded plugin payload; Arch recipe syntax/check/package functions inspected and staged payload exercised |
 | Performance | real previous Python player and Rust player measured sequentially on the same Sway output/workload; process CPU and RSS from /proc |
@@ -36,6 +36,7 @@ Rust test tools and the acceptance runner are development dependencies, not inst
 12. A 1024×1024 animation retains native pixels with a 32 MiB cache budget via lossless backing.
 13. Held-pointer motion remains unsnapped, presents its new edge and clears the trailing edge across buffer switches.
 14. Disabling that output updates daemon output state without crashing.
+15. A live asynchronous export contains real decoder frames, render commits, frame callbacks, input regions and drag motion events.
 
 Reproduce as a non-root user with Sway and grim installed:
 
@@ -85,3 +86,9 @@ couldn't create renderer
 Mango uses `fx_renderer_create` directly. `WLR_RENDERER=pixman` cannot substitute its renderer. No patched Mango build was presented as a successful target test. Source examination shows Overlay maps to `LyrSpecialOverlay`, above `LyrFullscreen` and `LyrSpecialFullscreen`; this is source evidence only.
 
 **Real Mango fullscreen, game mouse/keyboard pass-through, GPU presentation, physical hotplug and hardware energy consumption are unverified.** Niri and Hyprland have not been run. An unchanged GPU-backed Mango session must perform those checks before claiming target hardware acceptance. Run the fullscreen probe alongside locked GIFs and locked/edit canvases, observe mouse, keyboard and scroll input, test output scale/hotplug and inspect `gif-player doctor`. Session locking always remains controlled by the compositor.
+
+## 1.2.0 diagnostics checks
+
+Sixteen locked Rust unit/integration tests pass, including log rotation, valid JSONL/truncation, private export permissions, unknown-field exclusion, asynchronous live export with continued IPC, existing-directory rejection, persisted levels and stopped-daemon export. The real Sway runner now enables trace in an isolated XDG state directory and checks a completed report from genuine decode/render/input events. Logging/export use bounded writer/job queues and the existing wake stream; no mock event source is used. Native plugin API lint, Nix build/check and staged installation are repeated for the new package version. Current CPU/power figures for trace mode have not been benchmarked; historical 1.0 performance is not a 1.2 claim.
+
+In an additional unmodified Noctalia 5.2.1 software-EGL session, actual pointer clicks changed info → debug → trace and the native Export logs button created a complete report. The normal Rust app settings export button created another report and the footer displayed its completed path. These were real host/app interactions, not mocked callbacks. Host-only sound/PipeWire warnings from the audio-less cloud session are unrelated to plugin execution.

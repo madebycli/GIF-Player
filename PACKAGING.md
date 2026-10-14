@@ -80,3 +80,5 @@ nix build .#gif-player .#noctalia-plugin --no-write-lock-file
 ```
 
 The headless acceptance script requires Sway, grim and a non-root Linux user. Python is used only by that development test runner and measurement script, never by the installed player. x86_64 Linux builds were executed here; aarch64 outputs are defined/evaluated and require an aarch64 builder for compilation. See [acceptance evidence](docs/acceptance.md).
+
+Detailed logs use `$XDG_STATE_HOME/gif-player` (default `~/.local/state/gif-player`). No extra service is installed for logging. `gif-player logs level trace` persists its level; use `GIF_PLAYER_LOG=trace` in the daemon's service environment for startup diagnostics. `gif-player logs export [NEW_DIRECTORY]` exports live or stopped-daemon reports. Update/restart an old daemon to activate the new binary, and reinstall the embedded plugin for its settings buttons. See docs/diagnostics.md.

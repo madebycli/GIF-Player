@@ -52,6 +52,7 @@ pub struct Ui {
     scroll_max: i32,
     paint_scale: f32,
     pub error: Option<String>,
+    notice: Option<String>,
     font: Option<Font>,
     glyphs: HashMap<(char, u32), (fontdue::Metrics, Vec<u8>)>,
     revision: u64,
@@ -79,12 +80,14 @@ impl Ui {
             scroll_max: 0,
             paint_scale: 1.0,
             error: None,
+            notice: None,
             font: None,
             glyphs: HashMap::new(),
             revision: u64::MAX,
         }
     }
     pub fn show(&mut self, mode: &str, engine: &mut Engine) -> Result<()> {
+        crate::diag!(Info, "ui", "opened", json!({"mode":mode}));
         self.windowed = mode == "app";
         self.mode = mode.into();
         self.tab = match mode {
@@ -181,6 +184,16 @@ impl Ui {
             }
         }
         if self.revision != engine.revision {
+            if let Some(report) = crate::diagnostics::status(&engine.paths)
+                .get("last_export")
+                .filter(|v| v.is_object() && v["pending"] != true)
+            {
+                if let Some(error) = report.get("error").and_then(Value::as_str) {
+                    self.error = Some(error.into());
+                } else if let Some(directory) = report.get("directory").and_then(Value::as_str) {
+                    self.notice = Some(format!("Logs exported: {directory}"));
+                }
+            }
             self.revision = engine.revision;
             self.dirty = true;
         }
@@ -262,6 +275,9 @@ impl Ui {
             }
             Action::Command(cmd) => {
                 let result = engine.dispatch(&cmd);
+                if let Some(directory) = result.get("directory").and_then(Value::as_str) {
+                    self.notice = Some(format!("Exporting logs: {directory}"));
+                }
                 self.error = result
                     .get("error")
                     .and_then(Value::as_str)
@@ -729,6 +745,7 @@ impl Ui {
             .error
             .as_ref()
             .or(engine.error.as_ref())
+            .or(self.notice.as_ref())
             .cloned()
             .unwrap_or_else(|| format!("{} active", engine.widgets.len()));
         self.text(
@@ -1277,6 +1294,31 @@ impl Ui {
             454,
             180,
             Action::Command(json!({"action":"quit-daemon"})),
+            false,
+        );
+        let level = crate::diagnostics::level_name();
+        let next = match level {
+            "info" => "debug",
+            "debug" => "trace",
+            "trace" => "off",
+            _ => "info",
+        };
+        self.button(
+            pix,
+            &format!("Logs: {level}"),
+            20,
+            512,
+            180,
+            Action::Command(json!({"action":"logs-level","level":next})),
+            level == "trace",
+        );
+        self.button(
+            pix,
+            "Export log folder",
+            212,
+            512,
+            180,
+            Action::Command(json!({"action":"logs-export"})),
             false,
         );
     }

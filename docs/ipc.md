@@ -36,3 +36,11 @@ Protocol 2 uses UTF-8 newline-delimited JSON on `$XDG_RUNTIME_DIR/gif-player/dae
 Managed frontends register with `{"action":"watch","frontend":true}` (CLI `watch --frontend`). An edit-context request arrives as `frontend_request` with kind, widget ID and nonce. The frontend opens its own native control panel and acknowledges via `{"action":"frontend-ack","nonce":N}`. With no managed frontend, the daemon opens the standalone Rust control surface. This contract does not name a particular shell.
 
 Request size is bounded at 1 MiB. Malformed or unsupported commands return `ok:false` and an error. The CLI returns a nonzero exit status for failures. Socket access is restricted to the current user. Partial requests and blocked readers expire without blocking other clients.
+
+## Diagnostics
+
+`logs-level` takes `level` (`off`, `error`, `warn`, `info`, `debug`, `trace`), validates it and persists it. Snapshots expose a `logging` object with directory, effective level, queue-loss count, writer error, rotation limits and latest export status.
+
+`logs-export` accepts an optional `directory`. The directory must be new. It returns `{ok:true,pending:true,directory:...}` immediately and completes in a temporary worker. Query `logs-export-status` with that returned directory until `pending` is absent/false. Success returns `{ok:true,directory:...,warnings:[...]}`; failure includes `ok:false,error`. Unknown jobs return an error; only eight recent job results are retained. One export runs at a time. Completion wakes the Wayland loop and updates the streamed snapshot. Rendering and IPC do not wait for report disk writes.
+
+The CLI `logs export [NEW_DIRECTORY]` resolves relative paths in the caller's directory and waits up to 30 seconds for completion. A stopped daemon is handled through offline export rather than autostart. Live IPC errors are reported rather than silently substituted with an offline report.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 — Detailed diagnostics and folder export
+
+- Add timestamped JSONL lifecycle, IPC, decode, playback, cache, surface, buffer, input and persistence events, including frame/render/decompression timing in trace mode.
+- Keep disk writes asynchronous, bound the queue and rotate five 8 MiB log files; report queue loss and writer failures.
+- Export consistent log copies, sanitized runtime state, asset timing/storage, monitor/DPI details, system/process metrics and configuration validation into a new private folder, including after daemon shutdown.
+- Run exports in a temporary worker so rendering/input keep running. Add persisted logging levels and export actions to CLI, native Noctalia settings and the standalone app.
+- Extend real Wayland acceptance to assert exported frame/callback/input events.
+
 ## 1.1.0 — Quality, interaction and frontend corrections
 
 - Preserve native GIF pixels under cache pressure through lossless anonymous frame backing; improve scaling with bilinear filtering and higher-resolution previews.

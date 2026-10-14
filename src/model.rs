@@ -207,6 +207,8 @@ pub struct Engine {
     jobs: mpsc::SyncSender<DecodeJob>,
     results: mpsc::Receiver<DecodeResult>,
     pub wake: UnixStream,
+    notify: UnixStream,
+    export_revision: u64,
     pub previews: HashSet<PathBuf>,
     pub thumbnails: HashMap<PathBuf, Arc<Animation>>,
     thumb_pending: HashSet<PathBuf>,
@@ -230,15 +232,22 @@ impl Engine {
         let (wake, mut notify) = UnixStream::pair()?;
         wake.set_nonblocking(true)?;
         notify.set_nonblocking(true)?;
+        let export_notify = notify.try_clone()?;
         std::thread::Builder::new()
             .name("gif-decode".into())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
+                    let started = Instant::now();
+                    crate::diag!(Debug,"decoder","job_started",json!({"path":job.path,"thumbnail":job.thumbnail,"budget_bytes":job.budget}));
                     let result = if job.thumbnail {
                         decode::thumbnail(&job.path)
                     } else {
                         decode::load_cancellable(&job.path, job.budget, &job.cancel)
                     };
+                    match &result {
+                        Ok(animation) => crate::diag!(Info,"decoder","job_finished",json!({"path":job.path,"thumbnail":job.thumbnail,"duration_ms":started.elapsed().as_secs_f64()*1000.0,"source_size":[animation.width,animation.height],"frames":animation.frames.len(),"resident_bytes":animation.bytes,"storage":if animation.backing.is_some(){"lossless-disk"}else{"memory"},"warning":animation.warning})),
+                        Err(error) => crate::diag!(Warn,"decoder","job_failed",json!({"path":job.path,"thumbnail":job.thumbnail,"duration_ms":started.elapsed().as_secs_f64()*1000.0,"cancelled":job.cancel.load(Ordering::Relaxed),"error":format!("{error:#}")})),
+                    }
                     if sender
                         .send(DecodeResult {
                             path: job.path,
@@ -273,6 +282,8 @@ impl Engine {
             jobs,
             results,
             wake,
+            notify: export_notify,
+            export_revision: 0,
             previews: HashSet::new(),
             thumbnails: HashMap::new(),
             thumb_pending: HashSet::new(),
@@ -300,6 +311,12 @@ impl Engine {
             widget.hop = None;
             widget.next_jump = now + widget.settings.jump_rate;
             widget.position = (widget.settings.x, widget.settings.y);
+            crate::diag!(
+                Trace,
+                "input",
+                "drag_motion",
+                json!({"id":id,"position":widget.position,"bounds":widget.bounds,"size":widget.size})
+            );
             widget.dirty = true;
             self.next_save = Some(now + 0.4);
             // Pointer events must not serialize snapshots or re-layout frontends at mouse rate.
@@ -311,6 +328,12 @@ impl Engine {
     }
     pub fn finish_drag(&mut self, id: &str) {
         if let Some(widget) = self.widgets.get_mut(id) {
+            crate::diag!(
+                Debug,
+                "input",
+                "drag_released",
+                json!({"id":id,"position":widget.position})
+            );
             widget.settings.x = snap(
                 widget.settings.x,
                 widget.bounds.0 as f64,
@@ -391,6 +414,12 @@ impl Engine {
             }
             if let Some(asset) = self.assets.get_mut(&loaded.path) {
                 if !Arc::ptr_eq(&asset.cancel, &loaded.cancel) {
+                    crate::diag!(
+                        Debug,
+                        "decoder",
+                        "stale_result_discarded",
+                        json!({"path":loaded.path})
+                    );
                     continue;
                 }
                 match loaded.result {
@@ -432,6 +461,7 @@ impl Engine {
                 true
             } else {
                 asset.cancel.store(true, Ordering::Relaxed);
+                crate::diag!(Debug,"cache","asset_released",json!({"path":path,"reserved_bytes":asset.reserved,"pending":asset.animation.is_none()}));
                 false
             }
         });
@@ -457,9 +487,15 @@ impl Engine {
         Ok(())
     }
     pub fn snapshot(&self) -> Value {
-        json!({"ok":true,"protocol":2,"product":"Noctalia GIF Player","engine":"rust","revision":self.revision,"widgets":self.widgets.values().map(|w|w.status(self.assets.get(&w.path))).collect::<Vec<_>>(),"outputs":self.outputs,"profiles":self.store.profiles,"settings":self.store.settings,"cache_bytes":self.assets.values().map(|a|a.reserved).sum::<usize>()+self.thumbnails.values().map(|a|a.bytes).sum::<usize>(),"frontend_request":self.frontend_request,"error":self.error})
+        json!({"ok":true,"protocol":2,"product":"Noctalia GIF Player","engine":"rust","revision":self.revision,"widgets":self.widgets.values().map(|w|w.status(self.assets.get(&w.path))).collect::<Vec<_>>(),"outputs":self.outputs,"profiles":self.store.profiles,"settings":self.store.settings,"cache_bytes":self.assets.values().map(|a|a.reserved).sum::<usize>()+self.thumbnails.values().map(|a|a.bytes).sum::<usize>(),"frontend_request":self.frontend_request,"error":self.error,"logging":crate::diagnostics::status(&self.paths)})
     }
     pub fn restore(&mut self) -> Result<()> {
+        crate::diag!(
+            Info,
+            "persistence",
+            "restore_requested",
+            json!({"enabled":self.store.settings.get("restore").and_then(Value::as_bool).unwrap_or(true)})
+        );
         if self
             .store
             .settings
@@ -476,6 +512,12 @@ impl Engine {
                 .unwrap_or_default();
             for entry in entries {
                 if let Err(e) = self.spawn(&entry) {
+                    crate::diag!(
+                        Warn,
+                        "persistence",
+                        "restore_failed",
+                        json!({"request":crate::diagnostics::command_fields(&entry),"error":format!("{e:#}")})
+                    );
                     self.error = Some(format!("Restore: {e:#}"));
                 }
             }
@@ -517,6 +559,12 @@ impl Engine {
         }
         self.store.session = json!({"widgets":entries});
         self.store.save()?;
+        crate::diag!(
+            Debug,
+            "persistence",
+            "saved",
+            json!({"directory":self.paths.config_dir,"widgets":self.widgets.len()})
+        );
         self.next_save = None;
         Ok(())
     }
@@ -618,10 +666,23 @@ impl Engine {
         Ok(status)
     }
     pub fn dispatch(&mut self, cmd: &Value) -> Value {
-        match self.command(cmd) {
+        let started = Instant::now();
+        let result = match self.command(cmd) {
             Ok(value) => value,
             Err(e) => json!({"error":format!("{e:#}"),"ok":false}),
+        };
+        let fields = || json!({"request":crate::diagnostics::command_fields(cmd),"duration_us":started.elapsed().as_micros(),"widgets":self.widgets.len(),"revision":self.revision,"error":result.get("error")});
+        if result.get("error").is_some_and(|v| !v.is_null()) {
+            crate::diag!(Warn, "command", "failed", fields());
+        } else if matches!(
+            cmd["action"].as_str(),
+            Some("ping" | "snapshot" | "list" | "watch" | "status" | "library" | "profiles")
+        ) {
+            crate::diag!(Trace, "command", "read", fields());
+        } else {
+            crate::diag!(Info, "command", "completed", fields());
         }
+        result
     }
     fn command(&mut self, cmd: &Value) -> Result<Value> {
         ensure!(cmd.is_object(), "Request must be a JSON object");
@@ -630,6 +691,44 @@ impl Engine {
             .and_then(Value::as_str)
             .context("Missing action")?;
         match action {
+            "logs-level" => {
+                let level = cmd
+                    .get("level")
+                    .and_then(Value::as_str)
+                    .context("Missing log level")?;
+                crate::diagnostics::set_level(level)?;
+                self.store.settings["log_level"] = json!(level);
+                self.changed();
+                return Ok(json!({"ok":true,"logging":crate::diagnostics::status(&self.paths)}));
+            }
+            "logs-export" => {
+                let requested = cmd
+                    .get("directory")
+                    .filter(|v| !v.is_null())
+                    .map(|v| v.as_str().context("Export directory must be a string"))
+                    .transpose()?;
+                crate::diag!(
+                    Info,
+                    "diagnostics",
+                    "export_requested",
+                    json!({"directory":requested})
+                );
+                let mut snapshot = self.snapshot();
+                snapshot["diagnostics"] = json!({"uptime_seconds":self.now(),"asset_count":self.assets.len(),"thumbnail_count":self.thumbnails.len(),"pending_thumbnails":self.thumb_pending.len(),"managed_frontend":self.managed_frontend,"assets":self.assets.iter().map(|(path,asset)|json!({"path":path,"reserved_bytes":asset.reserved,"error":asset.error,"cancelled":asset.cancel.load(Ordering::Relaxed),"animation":asset.animation.as_ref().map(|a|json!({"source_size":[a.width,a.height],"logical_size":a.logical_size,"frames":a.frames.len(),"cycle_ms":a.ends_ms.last(),"delay_sample_ms":a.frames.iter().take(32).map(|f|f.delay_ms).collect::<Vec<_>>(),"storage":if a.backing.is_some(){"lossless-disk"}else{"memory"}}))})).collect::<Vec<_>>()});
+                return crate::diagnostics::start_export(
+                    self.paths.clone(),
+                    requested,
+                    snapshot,
+                    self.notify.try_clone()?,
+                );
+            }
+            "logs-export-status" => {
+                return Ok(crate::diagnostics::export_status(
+                    cmd.get("directory")
+                        .and_then(Value::as_str)
+                        .context("Missing export directory")?,
+                ));
+            }
             "ping" => {
                 return Ok(
                     json!({"ok":true,"daemon":true,"widgets":self.widgets.len(),"protocol":2,"engine":"rust","pid":std::process::id()}),
@@ -700,6 +799,12 @@ impl Engine {
                 ensure!(font.len() <= 256, "Font family too long");
                 let appearance = json!({"palette":palette,"font_family":font});
                 if self.store.settings["appearance"] != appearance {
+                    crate::diag!(
+                        Debug,
+                        "appearance",
+                        "changed",
+                        json!({"palette":palette,"font_family":font})
+                    );
                     self.store.settings["appearance"] = appearance;
                     for widget in self.widgets.values_mut() {
                         widget.dirty = true;
@@ -710,6 +815,11 @@ impl Engine {
             }
             "settings" => {
                 if let Some(settings) = cmd.get("settings").and_then(Value::as_object) {
+                    if let Some(level) = settings.get("log_level") {
+                        crate::diagnostics::set_level(
+                            level.as_str().context("Log level must be a string")?,
+                        )?;
+                    }
                     for (k, v) in settings {
                         self.store.settings[k] = v.clone();
                     }
@@ -1068,6 +1178,11 @@ impl Engine {
         Ok(result)
     }
     pub fn tick(&mut self) {
+        let export_revision = crate::diagnostics::export_revision();
+        if self.export_revision != export_revision {
+            self.export_revision = export_revision;
+            self.revision += 1;
+        }
         self.finish_loads();
         let now = self.now();
         let mut deadline: Option<f64> = None;
@@ -1100,6 +1215,12 @@ impl Engine {
             }
             let (index, remaining) = animation.frame_at(w.elapsed(now));
             if index != w.frame {
+                crate::diag!(
+                    Trace,
+                    "playback",
+                    "frame_selected",
+                    json!({"id":w.id,"from":w.frame,"to":index,"elapsed_media_ms":w.elapsed(now),"remaining_ms":remaining,"speed":w.settings.speed,"paused":w.settings.paused})
+                );
                 w.frame = index;
                 w.dirty = true;
             }
@@ -1151,6 +1272,12 @@ impl Engine {
             minimum(&mut deadline, save);
             if save <= now {
                 if let Err(e) = self.save() {
+                    crate::diag!(
+                        Error,
+                        "persistence",
+                        "save_failed",
+                        json!({"error":format!("{e:#}")})
+                    );
                     self.error = Some(format!("Save failed: {e:#}"));
                     self.next_save = Some(now + 5.0);
                 }
@@ -1220,6 +1347,7 @@ mod tests {
             config_dir: root.path().join("config"),
             cache_dir: root.path().join("cache"),
             data_dir: root.path().join("data"),
+            state_dir: root.path().join("state"),
             gif_dir: root.path().join("gifs"),
             gif_dir_explicit: true,
         };

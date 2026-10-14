@@ -33,3 +33,7 @@ State and profile object shapes and IPC protocol 2 remain compatible with the ol
 IPC is newline-delimited JSON, with up to 128 nonblocking peers, a 1 MiB request bound, 5-second incomplete-request timeout and 10-second backpressure timeout. Snapshot streams coalesce pending updates. Runtime paths reject unsafe ownership/symlinks, daemon exclusivity uses flock and sockets are user-only. No TCP endpoint or shell interpolation is used.
 
 The preserved Python branch permits regression comparison and rollback. Technical evidence lives in this repository; project context and handoff records live exclusively in `madebycli/master-context`.
+
+## Diagnostics
+
+A bounded nonblocking channel sends serialized JSONL records to one Rust writer thread. Severity checks happen before field construction. Each record is capped at 8 KiB; the 256-slot queue, 32 KiB write buffer and five 8 MiB rotating files bound logging resources. A temporary export worker asks the writer for consistent flushed copies, then writes private report files. Completion signals the existing Unix wake stream; snapshots/GUI receive the result without waiting for disk work in the Wayland loop. A separate advisory lock prevents competing writers. Logs expose failures/dropped events and preserve previous sessions. See docs/diagnostics.md for the public format and data scope.

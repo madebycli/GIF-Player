@@ -18,6 +18,7 @@ pub const MAX_MESSAGE: usize = 1024 * 1024;
 const MAX_REPLY: usize = 32 * 1024 * 1024;
 pub struct Peer {
     socket: UnixStream,
+    id: u64,
     input: Vec<u8>,
     output: Vec<u8>,
     written: usize,
@@ -32,6 +33,7 @@ pub struct Server {
     pub peers: Vec<Peer>,
     _lock: File,
     paths: Paths,
+    next_peer: u64,
 }
 impl Server {
     pub fn bind(paths: &Paths) -> Result<Self> {
@@ -57,6 +59,12 @@ impl Server {
             fs::remove_file(paths.socket())?;
         }
         let listener = UnixListener::bind(paths.socket())?;
+        crate::diag!(
+            Info,
+            "ipc",
+            "listening",
+            json!({"socket":paths.socket(),"peer_limit":128,"message_limit":MAX_MESSAGE})
+        );
         listener.set_nonblocking(true)?;
         fs::set_permissions(paths.socket(), fs::Permissions::from_mode(0o600))?;
         Ok(Self {
@@ -64,6 +72,7 @@ impl Server {
             peers: Vec::new(),
             _lock: lock,
             paths: paths.clone(),
+            next_peer: 0,
         })
     }
     pub fn fds(&self) -> Vec<(RawFd, i16)> {
@@ -84,13 +93,16 @@ impl Server {
     pub fn service(&mut self, engine: &mut Engine) {
         while let Ok((socket, _)) = self.listener.accept() {
             if self.peers.len() >= 128 {
+                crate::diag!(Warn, "ipc", "peer_limit", json!({"limit":128}));
                 continue;
             }
             if socket.set_nonblocking(true).is_err() {
                 continue;
             }
+            self.next_peer = self.next_peer.wrapping_add(1);
             self.peers.push(Peer {
                 socket,
+                id: self.next_peer,
                 input: Vec::new(),
                 output: Vec::new(),
                 written: 0,
@@ -100,6 +112,12 @@ impl Server {
                 since: Instant::now(),
                 revision: 0,
             });
+            crate::diag!(
+                Trace,
+                "ipc",
+                "peer_connected",
+                json!({"peer":self.next_peer,"peers":self.peers.len()})
+            );
         }
         for peer in &mut self.peers {
             if !peer.watch && !peer.closing {
@@ -113,6 +131,12 @@ impl Server {
                         Ok(n) => {
                             peer.input.extend_from_slice(&chunk[..n]);
                             if peer.input.len() > MAX_MESSAGE {
+                                crate::diag!(
+                                    Warn,
+                                    "ipc",
+                                    "request_too_large",
+                                    json!({"bytes":peer.input.len()})
+                                );
                                 peer.closing = true;
                                 break;
                             }
@@ -130,14 +154,34 @@ impl Server {
                 if let Some(end) = peer.input.iter().position(|b| *b == b'\n') {
                     let result = match serde_json::from_slice::<Value>(&peer.input[..end]) {
                         Ok(cmd) => {
+                            crate::diag!(
+                                Debug,
+                                "ipc",
+                                "request_received",
+                                json!({"peer":peer.id,"bytes":end,"request":crate::diagnostics::command_fields(&cmd)})
+                            );
                             peer.watch = cmd.get("action").and_then(Value::as_str) == Some("watch");
                             peer.frontend =
                                 cmd.get("frontend").and_then(Value::as_bool) == Some(true);
                             engine.dispatch(&cmd)
                         }
-                        Err(e) => json!({"error":format!("Invalid request: {e}")}),
+                        Err(e) => {
+                            crate::diag!(
+                                Warn,
+                                "ipc",
+                                "invalid_json",
+                                json!({"bytes":end,"error":e.to_string()})
+                            );
+                            json!({"error":format!("Invalid request: {e}")})
+                        }
                     };
                     peer.output = encode(&result);
+                    crate::diag!(
+                        Trace,
+                        "ipc",
+                        "reply_queued",
+                        json!({"peer":peer.id,"bytes":peer.output.len(),"watch":peer.watch,"error":result.get("error")})
+                    );
                     peer.written = 0;
                     peer.closing = !peer.watch;
                     peer.revision = engine.revision;
@@ -151,6 +195,12 @@ impl Server {
                     peer.written = 0;
                     peer.revision = engine.revision;
                     peer.since = Instant::now();
+                    crate::diag!(
+                        Trace,
+                        "ipc",
+                        "snapshot_queued",
+                        json!({"peer":peer.id,"revision":peer.revision,"bytes":peer.output.len(),"frontend":peer.frontend})
+                    );
                 }
             }
             while peer.written < peer.output.len() {
@@ -186,11 +236,20 @@ impl Server {
                 }
             }
         }
+        let previous_peers = self.peers.len();
         self.peers.retain(|p| {
             !(p.closing && p.written >= p.output.len())
                 && (p.watch || p.since.elapsed() < Duration::from_secs(5))
                 && (p.written >= p.output.len() || p.since.elapsed() < Duration::from_secs(10))
         });
+        if self.peers.len() != previous_peers {
+            crate::diag!(
+                Trace,
+                "ipc",
+                "peers_retired",
+                json!({"removed":previous_peers-self.peers.len(),"remaining":self.peers.len()})
+            );
+        }
         engine.managed_frontend = self.peers.iter().any(|p| p.watch && p.frontend);
     }
     pub fn timeout(&self) -> Option<Duration> {

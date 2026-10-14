@@ -42,6 +42,8 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
         "XDG_CONFIG_HOME": str(root / "config"),
         "XDG_DATA_HOME": str(root / "data"),
         "XDG_CACHE_HOME": str(root / "cache"),
+        "XDG_STATE_HOME": str(root / "state"),
+        "GIF_PLAYER_LOG": "trace",
         "WLR_BACKENDS": "headless",
         "WLR_HEADLESS_OUTPUTS": "2",
         "WLR_RENDERER": "pixman",
@@ -185,9 +187,16 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
         (artifacts / "native-drag.json").write_text(json.dumps({"native_size":status["source_size"],"storage":status["frame_storage"],"presentation_ms":presentation_ms,"max_ms":max(presentation_ms)},indent=2))
         subprocess.run(["swaymsg", "output HEADLESS-2 disable"], env=env, check=True, stdout=subprocess.DEVNULL)
         wait_for(lambda: len(request({"action": "snapshot"})["outputs"]) == 1, "output removal")
+        report = request({"action": "logs-export", "directory": str(artifacts / "diagnostics")})
+        assert report.get("ok"), report
+        wait_for(lambda: request({"action":"logs-export-status","directory":report["directory"]}).get("pending") != True, "asynchronous trace export")
+        records = [json.loads(line) for line in (artifacts / "diagnostics/daemon.jsonl").read_text().splitlines()]
+        for event in ["connected", "outputs_changed", "frame_decoded", "frame_committed", "frame_callback", "drag_motion", "input_region"]:
+            assert any(record.get("event") == event for record in records), f"missing real diagnostic event: {event}"
+        assert (artifacts / "diagnostics/snapshot.json").exists()
         request({"action": "quit-daemon"})
-        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "native resolution under cache pressure", "unsnapped visual drag", "output removal"]}, indent=2))
-        print("14 real Wayland acceptance checks passed")
+        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "native resolution under cache pressure", "unsnapped visual drag", "output removal", "asynchronous diagnostic trace export"]}, indent=2))
+        print("15 real Wayland acceptance checks passed")
     finally:
         for child in reversed(children):
             if child.poll() is None:

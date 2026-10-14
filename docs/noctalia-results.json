@@ -20,11 +20,14 @@
     "image click starts GIF; second click stops it",
     "continuous virtualized collection scroll reaches last of 32 GIFs",
     "compact settings restore switch",
-    "live Catppuccin-to-Dracula palette and configured monospace font synchronization with the normal Rust window"
+    "live Catppuccin-to-Dracula palette and configured monospace font synchronization with the normal Rust window",
+    "logging-level button changes info/debug/trace in the actual daemon",
+    "native Export logs button creates version 1.2 report without warnings",
+    "normal Rust app export button and completed-path footer"
   ],
   "limits": [
     "Mango runtime unavailable without /dev/dri",
     "Noctalia host tested on Sway; hardware font/display appearance can differ"
   ],
-  "version": "1.1.0"
+  "version": "1.2.0"
 }

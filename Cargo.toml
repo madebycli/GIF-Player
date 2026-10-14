@@ -1,6 +1,6 @@
 [package]
 name = "noctalia-gif-player"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 rust-version = "1.86"
 description = "Native Rust Wayland GIF overlays and Noctalia 5 integration"

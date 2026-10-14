@@ -66,6 +66,7 @@ pub fn parse() -> Result<Args> {
         "bench",
         "preview",
         "install-plugin",
+        "logs",
         "quit-daemon",
         "--help",
         "-h",
@@ -89,7 +90,7 @@ pub fn parse() -> Result<Args> {
 }
 pub fn help() {
     println!(
-        "Noctalia GIF Player — native Rust Wayland overlays\n\nUsage: gif-player [--gif-dir DIR] [COMMAND]\n\n  run GIF [--id ID] [--monitor N] [--state JSON]\n  ipc ID ACTION [ARGS]       all ACTION [ARGS]\n  list [--json]              edit | lock | stop-all | kill-all\n  picker | control | settings [--standalone]\n  app                       Normal xdg-shell application window\n  daemon [--headless] [--stay] [--no-restore]\n  profile list|save|apply|delete NAME | rename NAME NEW\n  library                   request JSON | watch [--reconnect]\n  doctor [--offline]         self-test | bench GIF\n  install-plugin [DEST] [--bar NAME | --no-bar]      quit-daemon\n\nWidget actions: status lock unlock toggle pause play resume reset quit\n  move X Y | move-by DX DY | corner tl/tr/bl/br/center | center\n  scale N | opacity N | speed N | flip none/h/v/hv/toggle-h/toggle-v\n  bounce | stop-bounce | hop | jump | jump-rate SECONDS\n  show | hide | visibility | canvas [true/false] | layer LAYER | output NAME\n\nWithout a command, open the picker. A GIF name launches a new instance.\nNoctalia 5 is optional; --standalone selects the Rust control surface."
+        "Noctalia GIF Player — native Rust Wayland overlays\n\nUsage: gif-player [--gif-dir DIR] [COMMAND]\n\n  run GIF [--id ID] [--monitor N] [--state JSON]\n  ipc ID ACTION [ARGS]       all ACTION [ARGS]\n  list [--json]              edit | lock | stop-all | kill-all\n  picker | control | settings [--standalone]\n  app                       Normal xdg-shell application window\n  daemon [--headless] [--stay] [--no-restore]\n  profile list|save|apply|delete NAME | rename NAME NEW\n  library                   request JSON | watch [--reconnect]\n  doctor [--offline]         self-test | bench GIF\n  logs path | level LEVEL | export [NEW_DIRECTORY]\n  install-plugin [DEST] [--bar NAME | --no-bar]      quit-daemon\n\nWidget actions: status lock unlock toggle pause play resume reset quit\n  move X Y | move-by DX DY | corner tl/tr/bl/br/center | center\n  scale N | opacity N | speed N | flip none/h/v/hv/toggle-h/toggle-v\n  bounce | stop-bounce | hop | jump | jump-rate SECONDS\n  show | hide | visibility | canvas [true/false] | layer LAYER | output NAME\n\nWithout a command, open the picker. A GIF name launches a new instance.\nNoctalia 5 is optional; --standalone selects the Rust control surface."
     );
 }
 pub fn widget_command(id: &str, args: &[String]) -> Result<Value> {
@@ -177,6 +178,7 @@ pub fn run(args: &Args) -> Result<i32> {
     let a = &args.args;
     let paths = &args.paths;
     match a[0].as_str() {
+        "logs" => return crate::diagnostics::cli(paths, a),
         "preview" => {
             let path = paths.resolve(a.get(1).context("preview needs a GIF")?)?;
             return print_result(crate::preview::generate(paths, &path)?);
@@ -378,7 +380,7 @@ pub fn run(args: &Args) -> Result<i32> {
     }
     print_result(result)
 }
-fn print_result(result: Value) -> Result<i32> {
+pub(crate) fn print_result(result: Value) -> Result<i32> {
     let failed = result.get("error").is_some_and(|v| !v.is_null())
         || result.get("ok") == Some(&Value::Bool(false));
     println!("{result}");

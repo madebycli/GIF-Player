@@ -12,6 +12,7 @@ pub struct Paths {
     pub config_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub data_dir: PathBuf,
+    pub state_dir: PathBuf,
     pub gif_dir: PathBuf,
     #[serde(skip)]
     pub gif_dir_explicit: bool,
@@ -41,6 +42,7 @@ impl Paths {
         let config_dir = xdg("XDG_CONFIG_HOME", home.join(".config")).join("gif-player");
         let cache_dir = xdg("XDG_CACHE_HOME", home.join(".cache")).join("gif-player");
         let data_dir = xdg("XDG_DATA_HOME", home.join(".local/share")).join("gif-player");
+        let state_dir = xdg("XDG_STATE_HOME", home.join(".local/state")).join("gif-player");
         let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
@@ -89,6 +91,7 @@ impl Paths {
             config_dir,
             cache_dir,
             data_dir,
+            state_dir,
             gif_dir,
             gif_dir_explicit,
         }

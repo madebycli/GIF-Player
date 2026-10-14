@@ -57,6 +57,7 @@ impl Session {
             .env("HOME", root.path())
             .env("XDG_RUNTIME_DIR", &runtime)
             .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_STATE_HOME", root.path().join("state"))
             .env("XDG_DATA_HOME", root.path().join("data"))
             .env("GIF_PLAYER_GIF_DIR", &gifs)
             .stdout(Stdio::null())
@@ -300,4 +301,100 @@ fn native_theme_updates_validate_and_persist() {
         snapshot["settings"]["appearance"]["font_family"],
         "monospace"
     );
+}
+
+#[test]
+fn detailed_logs_export_live_and_after_shutdown() {
+    let mut session = Session::new();
+    assert_eq!(
+        session.request(json!({"action":"logs-level","level":"trace"}))["ok"],
+        true
+    );
+    assert_eq!(
+        session.request(json!({"action":"logs-level","level":"invalid"}))["ok"],
+        false
+    );
+    let spawned=session.request(json!({"action":"spawn","gif":session.gif,"state":{"password":"DO_NOT_EXPORT_PRIVATE_FIELD","custom_token":"DO_NOT_EXPORT_PRIVATE_FIELD"}}));
+    let id = spawned["id"].as_str().unwrap();
+    session.wait_loaded(id);
+    session.request(json!({"action":"pause","id":id}));
+    let report = session.root.path().join("report with spaces 鳥");
+    let response = session.request(json!({"action":"logs-export","directory":report}));
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["directory"], json!(report));
+    let started = Instant::now();
+    loop {
+        assert_eq!(session.request(json!({"action":"ping"}))["ok"], true);
+        let state = session.request(json!({"action":"logs-export-status","directory":report}));
+        if state["pending"] != true {
+            assert_eq!(state["ok"], true, "{state}");
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        fs::metadata(&report).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    for name in [
+        "manifest.json",
+        "snapshot.json",
+        "system.json",
+        "configuration.json",
+    ] {
+        let file = report.join(name);
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let data = fs::read_to_string(file).unwrap();
+        let _: Value = serde_json::from_str(&data).unwrap();
+        assert!(!data.contains("DO_NOT_EXPORT_PRIVATE_FIELD"));
+    }
+    let logs = fs::read_to_string(report.join("daemon.jsonl")).unwrap();
+    assert!(!logs.contains("DO_NOT_EXPORT_PRIVATE_FIELD"));
+    let records = logs
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .collect::<Vec<_>>();
+    for event in [
+        "logging_started",
+        "listening",
+        "job_finished",
+        "completed",
+        "export_requested",
+    ] {
+        assert!(
+            records.iter().any(|r| r["event"] == event),
+            "missing {event}: {logs}"
+        );
+    }
+    assert!(records.iter().any(|r| r["level"] == "trace"));
+    let failed = session.request(json!({"action":"logs-export","directory":report}));
+    assert_eq!(failed["ok"], false);
+    session.request(json!({"action":"quit-daemon"}));
+    session.child.wait().unwrap();
+    let offline = session.root.path().join("offline report");
+    let result = Command::new(env!("CARGO_BIN_EXE_gif-player"))
+        .arg("logs")
+        .arg("export")
+        .arg(&offline)
+        .env("HOME", session.root.path())
+        .env("XDG_RUNTIME_DIR", session.root.path().join("runtime"))
+        .env("XDG_CONFIG_HOME", session.root.path().join("config"))
+        .env("XDG_STATE_HOME", session.root.path().join("state"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(offline.join("daemon.jsonl").exists());
+    let snapshot: Value =
+        serde_json::from_slice(&fs::read(offline.join("snapshot.json")).unwrap()).unwrap();
+    assert_eq!(snapshot["connected"], false);
+    let settings: Value = serde_json::from_slice(
+        &fs::read(session.root.path().join("config/gif-player/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["log_level"], "trace");
 }

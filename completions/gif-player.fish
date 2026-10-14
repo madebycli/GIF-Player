@@ -14,3 +14,7 @@ complete -c gif-player -n '__fish_seen_subcommand_from watch' -l reconnect -d 'A
 complete -c gif-player -n '__fish_seen_subcommand_from profile profiles' -a 'list save apply delete rename'
 complete -c gif-player -n '__fish_seen_subcommand_from all ipc' -a 'status lock unlock toggle pause play resume reset quit move move-by scale opacity speed flip corner center bounce stop-bounce hop jump jump-rate show hide visibility canvas layer output'
 complete -c gif -w gif-player
+
+complete -c gif-player -n '__fish_use_subcommand' -a logs -d 'Detailed diagnostic logs and folder export'
+complete -c gif-player -n '__fish_seen_subcommand_from logs' -a 'path level export'
+complete -c gif-player -n '__fish_seen_subcommand_from logs; and __fish_seen_subcommand_from level' -a 'off error warn info debug trace'

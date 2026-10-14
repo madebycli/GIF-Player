@@ -15,6 +15,7 @@
     "normal tiled application window",
     "native resolution under cache pressure",
     "unsnapped visual drag",
-    "output removal"
+    "output removal",
+    "asynchronous diagnostic trace export"
   ]
 }

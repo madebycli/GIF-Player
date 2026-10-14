@@ -91,3 +91,18 @@ The historical 1.0.0 60-second comparison of three 512×512 GIFs at 20 FPS on th
 ## Copyright
 
 [NOTICE.md](NOTICE.md) is preserved. No new license is granted for this repository or plugin, and no third-party artwork or GIFs are distributed. [Dependency license texts](docs/third-party-licenses.md) and [reference provenance](docs/provenance.md) retain third-party notices. Local plugin installation does not imply publication in Noctalia's official catalog.
+
+## Detailed logs
+
+For a reproduction with individual frames, buffers and mouse events:
+
+```sh
+gif-player logs level trace
+# Reproduce the problem, then export to a new directory:
+gif-player logs export ~/gif-player-diagnostics
+gif-player logs level info
+```
+
+The settings panels and standalone app also provide **Logs** and **Export logs** buttons. Without a directory, export creates a timestamped report under `$XDG_STATE_HOME/gif-player/exports` (default `~/.local/state/gif-player/exports`) and returns its path. `gif-player logs path` prints the continuous log directory. Reports also work after a daemon crash without starting another daemon.
+
+Logs are asynchronous and rotate at 8 MiB per file (five files, approximately 40 MiB maximum). Trace mode intentionally records far more data and costs more CPU/disk bandwidth; use `info` for ordinary playback. Exports contain GIF paths and selected session details; unknown legacy/config fields and a full environment dump are excluded. See [diagnostic format, contents and troubleshooting](docs/diagnostics.md).

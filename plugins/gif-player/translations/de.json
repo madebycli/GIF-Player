@@ -53,5 +53,7 @@
   "doctor": "Diagnose",
   "starter": "Starter",
   "app": "Anwendung öffnen",
-  "duplicate": "GIF duplizieren"
+  "duplicate": "GIF duplizieren",
+  "logs_level": "Logs",
+  "logs_export": "Logs exportieren"
 }

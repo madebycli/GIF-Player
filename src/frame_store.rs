@@ -59,6 +59,12 @@ impl FrameStore {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
         encoder.write_all(pixels)?;
         let compressed = encoder.finish()?;
+        crate::diag!(
+            Trace,
+            "cache",
+            "frame_compressed",
+            serde_json::json!({"index":self.records.len(),"raw_bytes":pixels.len(),"compressed_bytes":compressed.len(),"backing_bytes":self.length})
+        );
         ensure!(
             self.length + compressed.len() as u64 <= 1024 * 1024 * 1024,
             "Lossless GIF backing exceeds 1 GiB; use a shorter source animation"
@@ -77,12 +83,19 @@ impl FrameStore {
             .lock()
             .map_err(|_| anyhow::anyhow!("Frame cache lock"))?;
         if let Some(at) = cache.iter().position(|(i, _)| *i == index) {
+            crate::diag!(
+                Trace,
+                "cache",
+                "resident_hit",
+                serde_json::json!({"index":index,"resident_frames":cache.len()})
+            );
             let entry = cache.remove(at).unwrap();
             let pixels = entry.1.clone();
             cache.push_back(entry);
             return Ok(pixels);
         }
         let &(offset, length) = self.records.get(index).context("Frame index")?;
+        let started = std::time::Instant::now();
         let mut compressed = vec![0; length];
         self.file.read_exact_at(&mut compressed, offset)?;
         let mut pixels = Vec::with_capacity(self.frame_bytes);
@@ -98,6 +111,12 @@ impl FrameStore {
             cache.pop_front();
         }
         cache.push_back((index, pixels.clone()));
+        crate::diag!(
+            Trace,
+            "cache",
+            "frame_decompressed",
+            serde_json::json!({"index":index,"compressed_bytes":length,"raw_bytes":self.frame_bytes,"duration_us":started.elapsed().as_micros(),"resident_frames":cache.len()})
+        );
         Ok(pixels)
     }
 }

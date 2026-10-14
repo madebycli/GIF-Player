@@ -191,6 +191,12 @@ pub fn connect(engine: Engine) -> Result<(Connection, EventQueue<State>, State)>
     let connection = Connection::connect_to_env()
         .context("A running Wayland session is required (WAYLAND_DISPLAY)")?;
     let (globals, queue) = registry_queue_init::<State>(&connection)?;
+    crate::diag!(
+        Info,
+        "wayland",
+        "connected",
+        json!({"globals":globals.contents().clone_list().iter().map(|g|json!({"interface":g.interface,"version":g.version})).collect::<Vec<_>>()})
+    );
     let qh = queue.handle();
     let compositor = CompositorState::bind(&globals, &qh)?;
     let layer_shell =
@@ -244,6 +250,12 @@ pub fn doctor() -> Result<serde_json::Value> {
 }
 pub fn run(mut engine: Engine, stay: bool, restore: bool, headless: bool) -> Result<()> {
     signals();
+    crate::diag!(
+        Info,
+        "daemon",
+        "starting",
+        json!({"headless":headless,"stay":stay,"restore":restore})
+    );
     let mut server = Server::bind(&engine.paths)?;
     if headless {
         if restore {
@@ -306,7 +318,10 @@ pub fn run(mut engine: Engine, stay: bool, restore: bool, headless: bool) -> Res
         if state.engine.widgets.is_empty() && !state.ui.open {
             let now = state.engine.now();
             let since = *empty_since.get_or_insert(now);
-            if !stay && now - since > if ever_active { 2.0 } else { 10.0 } {
+            if !stay
+                && !crate::diagnostics::export_busy()
+                && now - since > if ever_active { 2.0 } else { 10.0 }
+            {
                 break;
             }
         } else {
@@ -330,7 +345,7 @@ pub fn run(mut engine: Engine, stay: bool, restore: bool, headless: bool) -> Res
         if let Some(peer) = server.timeout() {
             timeout = Some(timeout.map_or(peer, |t| t.min(peer)));
         }
-        if !stay {
+        if !stay && !crate::diagnostics::export_busy() {
             if let Some(since) = empty_since {
                 let empty = Duration::from_secs_f64(
                     (since + if ever_active { 2.0 } else { 10.0 } - state.engine.now()).max(0.0),
@@ -404,6 +419,12 @@ impl State {
             })
             .collect::<Vec<_>>();
         if serde_json::to_value(&outputs).ok() != serde_json::to_value(&self.engine.outputs).ok() {
+            crate::diag!(
+                Info,
+                "wayland",
+                "outputs_changed",
+                json!({"previous":self.engine.outputs,"current":outputs})
+            );
             self.engine.outputs = outputs;
             self.engine.revision += 1;
             for s in self.surfaces.values_mut() {
@@ -500,6 +521,12 @@ impl State {
         let specs = self.specs();
         for (key, spec) in &specs {
             if !self.surfaces.contains_key(key) {
+                crate::diag!(
+                    Debug,
+                    "surface",
+                    "created",
+                    json!({"key":key,"output":spec.output,"layer":spec.layer,"position":[spec.x,spec.y],"size":[spec.width,spec.height],"ui":spec.ui,"role":if spec.key=="app"{"xdg-toplevel"}else{"layer-shell"},"widgets":spec.widgets})
+                );
                 let output = self.output_proxy(&spec.output);
                 let surface = self.compositor.create_surface(qh);
                 let layer = if spec.key == "app" {
@@ -581,6 +608,12 @@ impl State {
             } else {
                 let surface = self.surfaces.get_mut(key).unwrap();
                 if surface.spec != *spec {
+                    crate::diag!(
+                        Trace,
+                        "surface",
+                        "geometry_changed",
+                        json!({"key":key,"position":[spec.x,spec.y],"size":[spec.width,spec.height],"layer":spec.layer})
+                    );
                     if surface.spec.width != spec.width || surface.spec.height != spec.height {
                         surface.layer.set_size(spec.width, spec.height);
                         surface.width = spec.width;
@@ -626,6 +659,12 @@ impl State {
                 }
             }
             if input != surface.input {
+                crate::diag!(
+                    Trace,
+                    "surface",
+                    "input_region",
+                    json!({"key":surface.spec.key,"click_through":input.is_empty(),"rectangles":input.iter().map(|r|[r.x,r.y,r.w,r.h]).collect::<Vec<_>>()})
+                );
                 let region = Region::new(&self.compositor)?;
                 for rect in &input {
                     region.add(rect.x, rect.y, rect.w, rect.h);
@@ -643,7 +682,18 @@ impl State {
             .keys()
             .all(|key| self.surfaces.get(key).is_some_and(|s| s.presented))
         {
-            self.surfaces.retain(|key, _| specs.contains_key(key));
+            self.surfaces.retain(|key, surface| {
+                let retained = specs.contains_key(key);
+                if !retained {
+                    crate::diag!(
+                        Debug,
+                        "surface",
+                        "destroyed",
+                        json!({"key":key,"frames_committed":surface.frames})
+                    );
+                }
+                retained
+            });
         }
         Ok(())
     }
@@ -706,6 +756,7 @@ impl State {
             if !surface.needs_draw && !changed && !needs_ui {
                 continue;
             }
+            let render_started = std::time::Instant::now();
             let index = if let Some(index) = surface
                 .buffers
                 .iter()
@@ -713,6 +764,12 @@ impl State {
             {
                 index
             } else if surface.buffers.len() < 2 {
+                crate::diag!(
+                    Debug,
+                    "renderer",
+                    "buffer_allocated",
+                    json!({"surface":spec.key,"size":[bw,bh],"bytes":bw as u64*bh as u64*4,"slot":surface.buffers.len()})
+                );
                 let (buffer, bytes) = surface.pool.create_buffer(
                     bw as i32,
                     bh as i32,
@@ -727,6 +784,12 @@ impl State {
                 });
                 surface.buffers.len() - 1
             } else {
+                crate::diag!(
+                    Trace,
+                    "renderer",
+                    "waiting_for_buffer",
+                    json!({"surface":spec.key,"slots":surface.buffers.len()})
+                );
                 continue;
             };
             let swap = &mut surface.buffers[index];
@@ -751,7 +814,7 @@ impl State {
                 .buffer
                 .canvas(&mut surface.pool)
                 .context("Released buffer became unavailable")?;
-            if let Some(dirty) = dirty {
+            if let Some(ref dirty) = dirty {
                 if spec.ui {
                     let image = self
                         .ui
@@ -766,7 +829,7 @@ impl State {
                         );
                     }
                 } else {
-                    render::paint(bytes, bw, bh, &items, &dirty)?;
+                    render::paint(bytes, bw, bh, &items, dirty)?;
                 }
                 if let Some(d) = dirty.clip(bw as i32, bh as i32) {
                     surface.layer.wl_surface().damage_buffer(d.x, d.y, d.w, d.h);
@@ -791,6 +854,12 @@ impl State {
             surface.presented = true;
             surface.needs_draw = false;
             surface.frames += 1;
+            crate::diag!(
+                Trace,
+                "renderer",
+                "frame_committed",
+                json!({"surface":spec.key,"number":surface.frames,"buffer_slot":index,"buffer_size":[bw,bh],"scale":scale,"render_us":render_started.elapsed().as_micros(),"damage":dirty.as_ref().map(|r|[r.x,r.y,r.w,r.h]),"widgets":items.iter().map(|i|json!({"id":i.id,"frame":i.signature.frame,"rect":[i.signature.rect.x,i.signature.rect.y,i.signature.rect.w,i.signature.rect.h]})).collect::<Vec<_>>()})
+            );
             drawn.extend(spec.widgets.iter().cloned());
         }
         for widget in self.engine.widgets.values_mut() {
@@ -865,6 +934,12 @@ impl CompositorHandler for State {
     ) {
         if let Some(s) = self.find_surface(proxy) {
             if s.fractional.is_none() {
+                crate::diag!(
+                    Debug,
+                    "surface",
+                    "scale_changed",
+                    json!({"surface":s.spec.key,"source":"integer","scale":factor.max(1)})
+                );
                 s.scale = factor.max(1) as f64;
                 s.buffers.clear();
                 s.needs_draw = true;
@@ -884,9 +959,15 @@ impl CompositorHandler for State {
         _: &Connection,
         _: &QueueHandle<Self>,
         proxy: &wl_surface::WlSurface,
-        _: u32,
+        callback_time: u32,
     ) {
         if let Some(s) = self.find_surface(proxy) {
+            crate::diag!(
+                Trace,
+                "wayland",
+                "frame_callback",
+                json!({"surface":s.spec.key,"compositor_time_ms":callback_time,"committed_frames":s.frames})
+            );
             s.ready = true;
         }
     }
@@ -929,6 +1010,12 @@ impl LayerShellHandler for State {
             .find(|(_, s)| s.layer.is_layer(layer))
             .map(|(k, _)| k.clone());
         if let Some(key) = key {
+            crate::diag!(
+                Debug,
+                "surface",
+                "compositor_closed",
+                json!({"surface":key})
+            );
             if key == "ui" || key == "app" {
                 self.ui.open = false;
             }
@@ -944,6 +1031,12 @@ impl LayerShellHandler for State {
         _: u32,
     ) {
         if let Some(s) = self.surfaces.values_mut().find(|s| s.layer.is_layer(layer)) {
+            crate::diag!(
+                Debug,
+                "surface",
+                "layer_configure",
+                json!({"surface":s.spec.key,"requested_size":[s.spec.width,s.spec.height],"configured_size":[configure.new_size.0,configure.new_size.1]})
+            );
             let width = if configure.new_size.0 > 0 {
                 configure.new_size.0
             } else {
@@ -996,6 +1089,12 @@ impl WindowHandler for State {
                 .new_size
                 .1
                 .map_or(surface.spec.height, |height| height.get());
+            crate::diag!(
+                Debug,
+                "surface",
+                "window_configure",
+                json!({"surface":surface.spec.key,"size":[width,height]})
+            );
             if (width, height) != (surface.width, surface.height) {
                 surface.width = width;
                 surface.height = height;
@@ -1087,6 +1186,12 @@ impl PointerHandler for State {
                 continue;
             };
             let (x, y) = event.position;
+            crate::diag!(
+                Trace,
+                "input",
+                "pointer_event",
+                json!({"surface":spec.key,"position":[x,y],"kind":format!("{:?}",event.kind)})
+            );
             if spec.ui {
                 match event.kind {
                     PointerEventKind::Press { button: 0x110, .. } => {
@@ -1148,6 +1253,12 @@ impl PointerHandler for State {
                             self.last_click = None;
                             self.drag = None;
                         } else if let Some(w) = self.engine.widgets.get(&id) {
+                            crate::diag!(
+                                Debug,
+                                "input",
+                                "drag_started",
+                                json!({"id":id,"pointer_position":position,"origin":w.position})
+                            );
                             self.drag = Some(Drag {
                                 id: id.clone(),
                                 start: position,
@@ -1291,6 +1402,12 @@ impl Dispatch2<WpFractionalScaleV1, State> for FractionalData {
     ) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
             if let Some(surface) = state.find_surface(&self.0) {
+                crate::diag!(
+                    Debug,
+                    "surface",
+                    "scale_changed",
+                    json!({"surface":surface.spec.key,"source":"fractional","scale":scale as f64/120.0})
+                );
                 surface.scale = scale as f64 / 120.0;
                 surface.buffers.clear();
                 surface.needs_draw = true;
