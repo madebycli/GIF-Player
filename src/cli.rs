@@ -52,6 +52,8 @@ pub fn parse() -> Result<Args> {
         "kill-all",
         "picker",
         "control",
+        "app",
+        "settings",
         "daemon",
         "doctor",
         "self-test",
@@ -87,7 +89,7 @@ pub fn parse() -> Result<Args> {
 }
 pub fn help() {
     println!(
-        "Noctalia GIF Player — native Rust Wayland overlays\n\nUsage: gif-player [--gif-dir DIR] [COMMAND]\n\n  run GIF [--id ID] [--monitor N] [--state JSON]\n  ipc ID ACTION [ARGS]       all ACTION [ARGS]\n  list [--json]              edit | lock | stop-all | kill-all\n  picker | control [--standalone]\n  daemon [--headless] [--stay] [--no-restore]\n  profile list|save|apply|delete NAME | rename NAME NEW\n  library                   request JSON | watch [--reconnect]\n  doctor [--offline]         self-test | bench GIF\n  install-plugin [DEST]      quit-daemon\n\nWidget actions: status lock unlock toggle pause play resume reset quit\n  move X Y | move-by DX DY | corner tl/tr/bl/br/center | center\n  scale N | opacity N | speed N | flip none/h/v/hv/toggle-h/toggle-v\n  bounce | stop-bounce | hop | jump | jump-rate SECONDS\n  show | hide | visibility | canvas [true/false] | layer LAYER | output NAME\n\nWithout a command, open the picker. A GIF name launches a new instance.\nNoctalia 5 is optional; --standalone selects the Rust control surface."
+        "Noctalia GIF Player — native Rust Wayland overlays\n\nUsage: gif-player [--gif-dir DIR] [COMMAND]\n\n  run GIF [--id ID] [--monitor N] [--state JSON]\n  ipc ID ACTION [ARGS]       all ACTION [ARGS]\n  list [--json]              edit | lock | stop-all | kill-all\n  picker | control | settings [--standalone]\n  app                       Normal xdg-shell application window\n  daemon [--headless] [--stay] [--no-restore]\n  profile list|save|apply|delete NAME | rename NAME NEW\n  library                   request JSON | watch [--reconnect]\n  doctor [--offline]         self-test | bench GIF\n  install-plugin [DEST] [--bar NAME | --no-bar]      quit-daemon\n\nWidget actions: status lock unlock toggle pause play resume reset quit\n  move X Y | move-by DX DY | corner tl/tr/bl/br/center | center\n  scale N | opacity N | speed N | flip none/h/v/hv/toggle-h/toggle-v\n  bounce | stop-bounce | hop | jump | jump-rate SECONDS\n  show | hide | visibility | canvas [true/false] | layer LAYER | output NAME\n\nWithout a command, open the picker. A GIF name launches a new instance.\nNoctalia 5 is optional; --standalone selects the Rust control surface."
     );
 }
 pub fn widget_command(id: &str, args: &[String]) -> Result<Value> {
@@ -215,6 +217,7 @@ pub fn run(args: &Args) -> Result<i32> {
         "install-plugin" => {
             let destination = a
                 .get(1)
+                .filter(|s| !s.starts_with("--"))
                 .map(|s| crate::paths::expand(s))
                 .unwrap_or_else(|| {
                     paths
@@ -224,8 +227,21 @@ pub fn run(args: &Args) -> Result<i32> {
                         .join("noctalia/plugins/gif-player")
                 });
             crate::plugin::install(&destination)?;
+            if !a.iter().any(|argument| argument == "--no-bar") {
+                let selected = a
+                    .iter()
+                    .position(|argument| argument == "--bar")
+                    .and_then(|index| a.get(index + 1));
+                match crate::noctalia::attach_bar(selected.map(String::as_str)) {
+                    Ok(Some(bar)) => println!(
+                        "Enabled Noctalia GIF Player and attached its widget to bar '{bar}'."
+                    ),
+                    Ok(None) => {}
+                    Err(error) => eprintln!("Plugin installed; bar attachment failed: {error:#}"),
+                }
+            }
             println!(
-                "Installed {}. Enable madebycli/gif-player in Noctalia Settings → Plugins.",
+                "Plugin files installed in {}. Widget placement is available in Noctalia Settings → Bars.",
                 destination.display()
             );
             return Ok(0);
@@ -255,8 +271,8 @@ pub fn run(args: &Args) -> Result<i32> {
             )?;
             return Ok(0);
         }
-        "picker" | "control" => {
-            if !a.iter().any(|s| s == "--standalone") {
+        "picker" | "control" | "settings" | "app" => {
+            if a[0] != "app" && !a.iter().any(|s| s == "--standalone") {
                 let panel = format!("madebycli/gif-player:{}", a[0]);
                 if Command::new("noctalia")
                     .args(["msg", "panel-toggle", &panel])
@@ -269,7 +285,10 @@ pub fn run(args: &Args) -> Result<i32> {
                 }
             }
             ensure_daemon(paths)?;
-            return print_result(ipc::request(paths, &json!({"action":a[0]}))?);
+            return print_result(ipc::request(
+                paths,
+                &json!({"action":if a[0] == "settings" { "settings-ui" } else { &a[0] }}),
+            )?);
         }
         _ => {}
     }

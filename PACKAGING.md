@@ -12,7 +12,7 @@ modules = [ inputs.gif-player.nixosModules.default {
 } ];
 ```
 
-The NixOS module installs the executable, desktop entries, completion and plugin payload. Run `gif-player install-plugin` as the desktop user, then enable `madebycli/gif-player` in Noctalia. It does not start a system-wide graphical daemon.
+The NixOS module installs the executable, desktop entries, completion and plugin payload. Run `gif-player install-plugin` as the desktop user. When Noctalia is available, this enables the local plugin and attaches the widget to an enabled bar; use `--bar flying` to select a named bar or `--no-bar` to install files only. It keeps a settings backup. It does not start a system-wide graphical daemon.
 
 ## Home Manager
 
@@ -62,7 +62,7 @@ sudo make PREFIX=/usr/local install
 gif-player install-plugin
 ```
 
-`make DESTDIR=/tmp/gif-package PREFIX=/usr install` stages all files without modifying the system. `make uninstall` removes that installation. `cargo install` installs the binary only, but it embeds the complete Noctalia plugin and its notice. Fonts are selected through optional fontconfig, common DejaVu paths, a Nix font fallback, or `settings.json`'s `font_file` setting.
+`make DESTDIR=/tmp/gif-package PREFIX=/usr install` stages all files without modifying the system. `make uninstall` removes that installation. `cargo install` installs the binary only, but it embeds the complete Noctalia plugin and its notice. Fonts are selected through optional fontconfig, common DejaVu paths, a Nix font fallback, or `settings.json`'s `font_file` setting. `gif-player app` opens a normal compositor-managed application window; floating picker, control and settings remain separately callable.
 
 Do not run the player as root. Start it inside the target user's Wayland session. Automatic startup from a compositor can simply execute `gif-player daemon --stay`; Home Manager provides supervised startup and restart.
 

@@ -1,7 +1,9 @@
 mod cli;
 mod decode;
+mod frame_store;
 mod ipc;
 mod model;
+mod noctalia;
 mod paths;
 mod plugin;
 mod preview;

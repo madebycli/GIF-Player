@@ -7,10 +7,10 @@ The Python implementation at `786e6fe1baf0ef31380bdd5e60c318f5aa3cb095` is retai
 | Area | Result and method |
 |---|---|
 | Rust | rustfmt; Clippy all targets with warnings denied; locked unit/integration tests; release binary/examples |
-| GIF composition | generated GIFs exercise transparent deltas, local palettes, disposal Background/Previous, precise normalized delays, long-time timeline lookup, bounded cache resampling with intact timing, cancellation and truncated prefix warnings |
+| GIF composition | generated GIFs exercise transparent deltas, local palettes, disposal Background/Previous, precise normalized delays, long-time timeline lookup, native pixels above 512 under cache pressure, lossless backing with intact timing, cancellation and truncated prefix warnings |
 | IPC v2 | genuine headless daemon and Unix clients exercise legacy actions, wildcards, independent IDs/shared frames, quoted/Unicode paths, partial slow clients and unsafe runtime symlinks |
 | Persistence | old state/profile shapes, unknown fields, byte-preserving migration backup, profile layout validation and atomic file replacement |
-| Sway 1.10.1 | eleven real Wayland acceptance checks described below; no fake compositor or mocked input |
+| Sway 1.10.1 | fourteen real Wayland acceptance checks described below; no fake compositor or mocked input |
 | Noctalia 5.2.1 | unmodified host loaded native service, bar widget, attached control panel and floating picker; native UI screenshot inspected; real Pause and Add clicks change daemon state; official plugin lint: 0 errors, 0 warnings; Luau bytecode compiler accepts all entries |
 | Nix x86_64 | locked package build and flake checks, CLI, native runtime closure and native Noctalia manifest lint |
 | Installation | staged Make/Cargo installation and embedded plugin payload; Arch recipe syntax/check/package functions inspected and staged payload exercised |
@@ -32,7 +32,10 @@ Rust test tools and the acceptance runner are development dependencies, not inst
 8. Two distinct outputs are reported and output selection works.
 9. One output uses 1920×1080 physical pixels at scale 1.5, with 1280×720 logical geometry.
 10. The actual standalone Rust control surface renders at fractional scale and its Pause all button changes daemon state.
-11. Disabling that output updates daemon output state without crashing.
+11. A normal xdg-shell app window is mapped as a tiled client.
+12. A 1024×1024 animation retains native pixels with a 32 MiB cache budget via lossless backing.
+13. Held-pointer motion remains unsnapped, presents its new edge and clears the trailing edge across buffer switches.
+14. Disabling that output updates daemon output state without crashing.
 
 Reproduce as a non-root user with Sway and grim installed:
 
@@ -50,7 +53,13 @@ The real Noctalia 5.2.1 host ran under Sway using Mesa software EGL, with `madeb
 
 Noctalia was also compiled from the examined upstream source without changing its implementation. The plugin's UI comes from host `ui.*` components and host design roles; the independent Rust surface is a separate fallback frontend.
 
-## Performance
+## 1.1.0 frontend and drag checks
+
+Actual Noctalia 5.2.1 checks used a disabled `default` bar and enabled vertical `flying` bar (35 px). Installation selected `flying`, validated the resulting config and displayed the zero-GIF widget; clicking it opened native controls. Clicking a gallery image started its GIF, and clicking again stopped it. A 32-GIF collection scrolled to its final rows without pagination. Compact settings and the normal Rust app were visually inspected. Changing the real host from Catppuccin to Dracula updated the daemon appearance and the visible app colors automatically, including the configured monospace font.
+
+The native 1024-pixel drag test samples newly covered and vacated screenshot pixels, not just IPC coordinates. `docs/drag-results.json` records end-to-end test times including compositor capture, PNG encoding and a separate PNG-reader process; these are not mouse-to-photon latency measurements. Mango hardware interaction remains unverified.
+
+## Historical 1.0.0 performance
 
 Exact data is in [performance.json](performance.json). The generated media contains three separate 512×512 GIFs, each with 24 frames and 50 ms delays. All are visible at scale 0.7 on HEADLESS-1, scale 1, without motion effects. Each warm process was measured for 60 seconds using `tools/measure.py`, sequentially to avoid covering one implementation with the other. The previous Python implementation was run with its actual GTK/Pillow/GtkLayerShell runtime, not estimated.
 
@@ -61,7 +70,7 @@ Exact data is in [performance.json](performance.json). The generated media conta
 | Rust, 3 paused GIFs, 20 seconds | 0% | 82.4 MiB |
 | Rust, all stopped, `--stay`, 10 seconds | 0% | 4.6 MiB |
 
-That workload measured approximately 83.5% less player CPU and 36.3% less peak RSS. The release executable is about 2 MiB on x86_64. Figures exclude compositor CPU, disk preview storage and hardware energy use; RSS includes the player's media caches and mapped buffers. Fully transparent fullscreen motion canvases cost more buffer memory than compact stationary surfaces. Cache limits are not a promise that total RSS always stays below the same number. No universal performance or power claim is inferred.
+That workload measured approximately 83.5% less player CPU and 36.3% less peak RSS. The 1.0.0 release executable was about 2 MiB on x86_64. Figures exclude compositor CPU, disk preview storage and hardware energy use; RSS includes the player's media caches and mapped buffers. Fully transparent fullscreen motion canvases cost more buffer memory than compact stationary surfaces. Cache limits are not a promise that total RSS always stays below the same number. No universal performance or power claim is inferred. These numbers describe the 1.0.0 renderer; native-resolution/lossless storage and bilinear resampling changed that workload in 1.1.0, so they must not be quoted as fresh 1.1.0 measurements.
 
 ## MangoWM and remaining graphical limits
 

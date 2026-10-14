@@ -30,18 +30,20 @@ For desktop launchers, aliases, Fish completion and documentation: `cargo build 
 
 ### Native Noctalia 5 UI
 
-Requires Noctalia 5 with plugin API **30 or later** (tested with 5.2.1). Enable `madebycli/gif-player` under Settings → Plugins. Add its **player** widget through Noctalia's normal bar widget manager. Left click opens the native control panel; right click opens the floating picker. Both use Noctalia's own controls, typography, icons, color roles, spacing and panels. No external imitation is embedded.
+Requires Noctalia 5 with plugin API **30 or later** (tested with 5.2.1). `gif-player install-plugin` installs/enables the local plugin and adds its widget to an enabled bar, preserving the other widgets. It saves a backup of Noctalia's settings before editing them. With multiple bars, use `gif-player install-plugin --bar flying` to choose the target; `--no-bar` installs only the files. Widget placement remains editable through Noctalia's normal bar manager.
 
-Open the floating picker independently:
+The **picker**, **playback starter** and **settings** are separate native host panels. The picker is a continuous, virtualized gallery: click an image to start its GIF; click again to stop its instances. It has no per-tile Add/Stop buttons, pagination or global action toolbar. Active images have a theme-colored outline. The control panel holds per-GIF/global playback tools; the settings panel holds the compact restore switch, layouts and application/daemon actions.
 
 ```sh
 gif-player picker
-# or: noctalia msg panel-toggle madebycli/gif-player:picker
+gif-player control
+gif-player settings
+gif-player app
 ```
 
-The plugin reads the same daemon state as the CLI and standalone UI. Its executable and collection directory can be configured through Noctalia's native plugin settings. English and German translations are included. See [plugin documentation](plugins/gif-player/README.md).
+`app` opens a **normal xdg-shell application window** with sidebar navigation, all four pages and compositor-managed resizing/tiling. It does not request a floating layer-shell role. Its colors and font follow the current Noctalia host through the plugin's generic appearance IPC; changes are applied live. The last appearance is retained for use without Noctalia. Standalone controls remain Rust and do not require the host. `--standalone` explicitly selects the Rust picker/control/settings frontend.
 
-Without Noctalia, `gif-player picker` and `gif-player control` open the Rust UI automatically. `--standalone` explicitly selects it.
+All Noctalia panels use host `ui.*` components, typography, color roles and transitions. Left click on the bar widget opens playback controls, right click opens the picker; settings are available through the small gear action. The bar remains visible with zero active GIFs, including on vertical bars. See [plugin documentation](plugins/gif-player/README.md).
 
 ## Use
 
@@ -68,9 +70,9 @@ All legacy entry points remain: `run`, `ipc`, `all`, `list`, `edit`, `lock`, `st
 
 Widget actions include status, lock/unlock/toggle, pause/play/resume, scale (0.1–5), opacity (0–1), speed (0.1–10), move/move-by, corners/center, horizontal/vertical mirroring, bounce/stop-bounce, hop, automatic jump/jump-rate, reset and quit. Additional actions control visibility, output, layer and fullscreen canvas. See `gif-player --help` and [IPC reference](docs/ipc.md).
 
-Locked GIFs use an **empty input region** and never request keyboard focus. In edit mode, only GIF rectangles capture pointer input, including on a transparent fullscreen canvas. Drag with the left button, resize with the wheel, double click to lock, and right click for controls. Edge and center snapping uses a 14 logical pixel threshold. Coordinates are output-relative logical pixels; negative and offscreen positions are valid. The default layer is `overlay`; background, bottom and top are also available.
+Locked GIFs use an **empty input region** and never request keyboard focus. In edit mode, only GIF rectangles capture pointer input, including on a transparent fullscreen canvas. Drag with the left button, resize with the wheel, double click to lock, and right click for controls. Dragging follows the pointer directly; edge/center snapping is applied on release within 14 logical pixels. Frontend updates during motion are coalesced instead of rebuilding controls for every mouse event. Coordinates are output-relative logical pixels; negative and offscreen positions are valid. The default layer is `overlay`; background, bottom and top are also available.
 
-The collection, active-widget, profile and settings pages are available in both native Noctalia panels and the standalone UI. Thumbnails decode only the first frame; hover previews animate on demand. Profiles save, replace, rename, delete and restore layouts. Global controls affect all active widgets.
+The collection, active-widget, profile and settings pages are available in both native Noctalia panels and the standalone UI. Playback retains original source pixels and timing. If decoded frames exceed the RAM budget, lossless anonymous disk backing replaces resolution reduction. Display geometry stays compatible with saved layouts. Thumbnails decode only the first frame; hover previews animate on demand. Profiles save, replace, rename, delete and restore layouts. Global controls affect all active widgets.
 
 ## Configuration and autostart
 
@@ -80,9 +82,9 @@ The default session restore setting is enabled. `gif-player daemon --stay` runs 
 
 ## Verification and performance
 
-On an unmodified headless Sway session, the automated suite verifies fullscreen overlay pixels, click-through, keyboard/scroll pass-through, edit-region isolation, dragging, offscreen positioning, two outputs, fractional scale and output removal. The real Noctalia 5.2.1 host has also loaded the native service, bar, picker and control panel. Cargo checks and Nix checks run in CI.
+On an unmodified headless Sway session, the automated suite verifies fullscreen overlay pixels, click-through, keyboard/scroll pass-through, edit-region isolation, dragging, offscreen positioning, two outputs, fractional scale, native-resolution cache pressure, trailing-buffer cleanup, normal application-window mapping and output removal. The real Noctalia 5.2.1 host has also loaded the native service, bar, picker and control panel. Cargo checks and Nix checks run in CI.
 
-A 60-second comparison of three 512×512 GIFs at 20 FPS on the same Sway setup measured **4.48% CPU / 82.4 MiB RSS** for Rust versus **27.18% CPU / 129.4 MiB peak RSS** for the preserved Python version. Paused Rust playback measured 0% CPU; after stopping all GIFs, RSS fell to 4.6 MiB. These measurements apply to that workload, not every GIF or compositor.
+The historical 1.0.0 60-second comparison of three 512×512 GIFs at 20 FPS on the same Sway setup measured **4.48% CPU / 82.4 MiB RSS** for Rust versus **27.18% CPU / 129.4 MiB peak RSS** for the preserved Python version. Paused Rust playback measured 0% CPU; after stopping all GIFs, RSS fell to 4.6 MiB. Those historical measurements apply to the 1.0.0 workload; they are not a performance claim for the new native-resolution/lossless backing and bilinear renderer.
 
 **MangoWM hardware acceptance remains unverified:** this environment has no `/dev/dri`; unchanged MangoWM 0.18.0 cannot initialize its required GLES/scenefx renderer. Noctalia integration and Sway input tests do not establish Mango fullscreen/game behavior. Niri and Hyprland have not been run here. See [acceptance evidence and reproduction](docs/acceptance.md) for exact limits and commands.
 

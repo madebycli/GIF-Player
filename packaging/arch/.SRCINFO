@@ -1,6 +1,6 @@
 pkgbase = noctalia-gif-player
 	pkgdesc = Native Rust Wayland GIF overlays with optional native Noctalia 5 controls
-	pkgver = 1.0.0
+	pkgver = 1.1.0
 	pkgrel = 1
 	url = https://github.com/madebycli/GIF-Player
 	arch = x86_64

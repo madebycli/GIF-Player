@@ -6,6 +6,10 @@ const FILES: &[(&str, &str)] = &[
         "plugin.toml",
         include_str!("../plugins/gif-player/plugin.toml"),
     ),
+    (
+        "settings.luau",
+        include_str!("../plugins/gif-player/settings.luau"),
+    ),
     ("bar.luau", include_str!("../plugins/gif-player/bar.luau")),
     (
         "service.luau",

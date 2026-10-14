@@ -1,6 +1,6 @@
 complete -c gif-player -f
 complete -c gif-player -l gif-dir -r -d 'GIF-Verzeichnis'
-complete -c gif-player -n '__fish_use_subcommand' -a 'run ipc all list edit lock stop-all kill-all picker control daemon doctor self-test request watch library catalog profile profiles bench preview install-plugin quit-daemon' -d 'Noctalia GIF Player Befehl'
+complete -c gif-player -n '__fish_use_subcommand' -a 'run ipc all list edit lock stop-all kill-all picker control app settings daemon doctor self-test request watch library catalog profile profiles bench preview install-plugin quit-daemon' -d 'Noctalia GIF Player Befehl'
 complete -c gif-player -n '__fish_seen_subcommand_from run' -l id -r -d 'Widget-ID'
 complete -c gif-player -n '__fish_seen_subcommand_from run' -l monitor -r -d 'Monitorindex'
 complete -c gif-player -n '__fish_seen_subcommand_from run' -l output -r -d 'Wayland-Ausgang'

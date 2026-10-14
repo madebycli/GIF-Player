@@ -12,7 +12,7 @@ use std::{
 
 pub const SOURCE_DIM: u32 = 512;
 pub const CACHE_LIMIT: usize = 256 * 1024 * 1024;
-pub fn dimensions(path: &Path) -> Result<(u32, u32)> {
+pub fn native_dimensions(path: &Path) -> Result<(u32, u32)> {
     use std::io::Read;
     let mut header = [0u8; 10];
     File::open(path)?.read_exact(&mut header)?;
@@ -26,6 +26,10 @@ pub fn dimensions(path: &Path) -> Result<(u32, u32)> {
         w > 0 && h > 0 && w as u64 * h as u64 <= 16_777_216,
         "GIF canvas exceeds 16 megapixels"
     );
+    Ok((w, h))
+}
+pub fn dimensions(path: &Path) -> Result<(u32, u32)> {
+    let (w, h) = native_dimensions(path)?;
     let factor = (SOURCE_DIM as f64 / w.max(h) as f64).min(1.0);
     Ok((
         (w as f64 * factor).round().max(1.0) as u32,
@@ -39,6 +43,7 @@ pub struct Frame {
 }
 #[derive(Debug)]
 pub struct Animation {
+    pub backing: Option<Arc<crate::frame_store::FrameStore>>,
     pub width: u32,
     pub height: u32,
     pub logical_size: (u32, u32),
@@ -48,6 +53,13 @@ pub struct Animation {
     pub warning: Option<String>,
 }
 impl Animation {
+    pub fn pixels(&self, index: usize) -> Result<Arc<[u8]>> {
+        if let Some(backing) = &self.backing {
+            backing.pixels(index)
+        } else {
+            Ok(self.frames[index].pixels.clone())
+        }
+    }
     pub fn frame_at(&self, elapsed_ms: f64) -> (usize, f64) {
         let total = *self.ends_ms.last().unwrap_or(&100) as f64;
         let phase = elapsed_ms.rem_euclid(total);
@@ -68,19 +80,24 @@ pub fn duration(delay: u16) -> u32 {
 
 /// Materialize delta frames and disposal before resampling; transparent pixels never erase Keep frames.
 pub fn load(path: &Path, budget: usize) -> Result<Animation> {
-    load_frames(path, budget, None, None)
+    load_frames(path, budget, None, None, None, None)
 }
 pub fn load_cancellable(path: &Path, budget: usize, cancel: &AtomicBool) -> Result<Animation> {
-    load_frames(path, budget, None, Some(cancel))
+    load_frames(path, budget, None, Some(cancel), None, None)
 }
 pub fn thumbnail(path: &Path) -> Result<Animation> {
-    load_frames(path, 2 * 1024 * 1024, Some(1), None)
+    load_frames(path, 2 * 1024 * 1024, Some(1), None, Some(384), None)
+}
+pub fn preview(path: &Path) -> Result<Animation> {
+    load_frames(path, 8 * 1024 * 1024, None, None, Some(384), None)
 }
 fn load_frames(
     path: &Path,
     budget: usize,
     limit: Option<usize>,
     cancel: Option<&AtomicBool>,
+    sample: Option<u32>,
+    spool_dir: Option<&Path>,
 ) -> Result<Animation> {
     let file = File::open(path).with_context(|| format!("Open GIF {}", path.display()))?;
     ensure!(
@@ -98,10 +115,12 @@ fn load_frames(
         sw > 0 && sh > 0 && sw.checked_mul(sh).is_some_and(|n| n <= 16_777_216),
         "GIF canvas exceeds 16 megapixels"
     );
-    let factor = (SOURCE_DIM as f64 / sw.max(sh) as f64).min(1.0);
-    let mut width = (sw as f64 * factor).round().max(1.0) as u32;
-    let mut height = (sh as f64 * factor).round().max(1.0) as u32;
-    let logical_size = (width, height);
+    let factor = sample.map_or(1.0, |size| (size as f64 / sw.max(sh) as f64).min(1.0));
+    let width = (sw as f64 * factor).round().max(1.0) as u32;
+    let height = (sh as f64 * factor).round().max(1.0) as u32;
+    let logical_size = dimensions(path)?;
+    let frame_bytes = width as usize * height as usize * 4;
+    let mut backing: Option<crate::frame_store::FrameStore> = None;
     let mut canvas = vec![0u8; sw * sh * 4];
     let mut restore = Vec::new();
     let background = reader
@@ -181,22 +200,18 @@ fn load_frames(
                 background
             },
         );
-        // Reduce the whole cache, never discard animation frames when reaching the budget.
-        while (frames.len() + 1)
-            * (width as usize * height as usize * 4 + std::mem::size_of::<Frame>() + 8)
-            > budget
+        if backing.is_none()
+            && (frames.len() + 1) * (frame_bytes + std::mem::size_of::<Frame>() + 8) > budget
         {
-            ensure!(
-                width > 1 || height > 1,
-                "Frame metadata/cache exceeds memory budget"
-            );
-            let nw = width.div_ceil(2);
-            let nh = height.div_ceil(2);
+            let directory = spool_dir
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| crate::paths::Paths::new(None).cache_dir.join("frames"));
+            let mut storage = crate::frame_store::FrameStore::new(&directory, frame_bytes)?;
             for old in &mut frames {
-                old.pixels = resize(&old.pixels, width, height, nw, nh).into();
+                storage.push(&old.pixels)?;
+                old.pixels = Arc::from([]);
             }
-            width = nw;
-            height = nh;
+            backing = Some(storage);
         }
         let mut pixels = resize(&canvas, sw as u32, sh as u32, width, height);
         for px in pixels.chunks_exact_mut(4) {
@@ -205,8 +220,10 @@ fn load_frames(
                 *c = ((*c as u16 * a + 127) / 255) as u8;
             }
         }
-        // Deduplicate identical composited frames without changing their timing.
-        let pixels = if let Some(last) = frames
+        let pixels = if let Some(storage) = &mut backing {
+            storage.push(&pixels)?;
+            Arc::from([])
+        } else if let Some(last) = frames
             .last()
             .filter(|last| last.pixels.as_ref() == pixels.as_slice())
         {
@@ -233,9 +250,21 @@ fn load_frames(
             end
         })
         .collect();
-    let bytes =
-        frames.len() * (width as usize * height as usize * 4 + std::mem::size_of::<Frame>() + 8);
+    let metadata =
+        frames.len() * (std::mem::size_of::<Frame>() + 8 + if backing.is_some() { 16 } else { 0 });
+    let bytes = if let Some(storage) = &mut backing {
+        ensure!(
+            budget.saturating_sub(metadata) >= frame_bytes,
+            "Native frame exceeds the available cache budget"
+        );
+        let slots = ((budget - metadata) / frame_bytes).clamp(1, 3);
+        storage.set_slots(slots);
+        metadata + slots * frame_bytes
+    } else {
+        frames.len() * frame_bytes + metadata
+    };
     Ok(Animation {
+        backing: backing.map(Arc::new),
         width,
         height,
         logical_size,
@@ -268,8 +297,55 @@ mod tests {
     use super::*;
     use gif::{Encoder, Frame as GifFrame};
     #[test]
+    fn native_pixels_survive_cache_pressure_above_512() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        {
+            let mut encoder = Encoder::new(
+                File::create(file.path()).unwrap(),
+                768,
+                2,
+                &[0, 0, 0, 255, 255, 255],
+            )
+            .unwrap();
+            for phase in 0..4 {
+                encoder
+                    .write_frame(&GifFrame {
+                        width: 768,
+                        height: 2,
+                        buffer: (0..1536)
+                            .map(|x| ((x + phase) % 2) as u8)
+                            .collect::<Vec<_>>()
+                            .into(),
+                        delay: 5,
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+        }
+        let animation = load_frames(
+            file.path(),
+            16384,
+            None,
+            None,
+            None,
+            Some(&directory.path().join("frames")),
+        )
+        .unwrap();
+        assert_eq!((animation.width, animation.height), (768, 2));
+        assert!(animation.backing.is_some());
+        for phase in 0..4 {
+            let pixels = animation.pixels(phase).unwrap();
+            for x in 0..768 {
+                let color = if (x + phase) % 2 == 0 { 0 } else { 255 };
+                assert_eq!(&pixels[x * 4..x * 4 + 4], &[color, color, color, 255]);
+            }
+        }
+    }
+    #[test]
     fn cache_budget_cancellation_and_truncated_prefix() {
-        let file = tempfile::NamedTempFile::new().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let file = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
         {
             let mut encoder = Encoder::new(
                 File::create(file.path()).unwrap(),
@@ -290,10 +366,20 @@ mod tests {
                     .unwrap();
             }
         }
-        let animation = load(file.path(), 4096).unwrap();
+        let animation = load_frames(
+            file.path(),
+            16384,
+            None,
+            None,
+            None,
+            Some(&directory.path().join("frames")),
+        )
+        .unwrap();
         assert_eq!(animation.logical_size, (64, 32));
         assert_eq!(animation.frames.len(), 8);
-        assert!(animation.width < 64 && animation.bytes <= 4096);
+        assert_eq!(animation.width, 64);
+        assert!(animation.backing.is_some() && animation.bytes <= 16384);
+        assert_eq!(&animation.pixels(1).unwrap()[..4], &[255, 0, 0, 255]);
         assert_eq!(animation.ends_ms[7], 450);
         assert_eq!(animation.frame_at(100.0).0, 1);
         assert_eq!(animation.frame_at(450.0 * 1e6 + 100.0).0, 1);

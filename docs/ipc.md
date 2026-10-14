@@ -9,7 +9,7 @@ Protocol 2 uses UTF-8 newline-delimited JSON on `$XDG_RUNTIME_DIR/gif-player/dae
 {"action":"profile-save","name":"desk"}
 ```
 
-`spawn` accepts a path or collection name, optional ID, legacy monitor index, output name and state object. IDs are unique. Missing IDs use the filename stem and numbered suffixes. Settings include x, y, scale, opacity, speed, locked, visible, paused, flip_h, flip_v, bouncing, jumping, jump_rate, output, layer and canvas. Unknown persisted fields are retained. Per-widget results retain the legacy status keys, including actual position, base_position, size, screen and frames; `frames` is `[decoded_count,total_count]`.
+`spawn` accepts a path or collection name, optional ID, legacy monitor index, output name and state object. IDs are unique. Missing IDs use the filename stem and numbered suffixes. Settings include x, y, scale, opacity, speed, locked, visible, paused, flip_h, flip_v, bouncing, jumping, jump_rate, output, layer and canvas. Unknown persisted fields are retained. Per-widget results retain the legacy status keys, including actual position, base_position, size, screen, source_size, frame_storage and frames; `frames` is `[decoded_count,total_count]`.
 
 | Action | Additional fields |
 |---|---|
@@ -26,7 +26,8 @@ Protocol 2 uses UTF-8 newline-delimited JSON on `$XDG_RUNTIME_DIR/gif-player/dae
 | profile-rename | name, new_name |
 | library-directory | path |
 | settings | optional settings object (including restore boolean) |
-| picker, control, ui-close | none |
+| picker, control, app, settings-ui, ui-close | none |
+| appearance | palette object with hex color roles, font_family |
 
 `id:"*"` selects all active widgets for legacy global actions. Use CLI `all ACTION`, `edit`, `lock`, `stop-all` or `kill-all` as shortcuts. Profile save replaces an existing profile explicitly; rename refuses collisions. Profile apply validates paths and settings before replacing active widgets.
 

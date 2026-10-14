@@ -1,0 +1,17 @@
+{
+  "native_size": [
+    1024,
+    1024
+  ],
+  "storage": "lossless-disk",
+  "presentation_ms": [
+    67.31554900034098,
+    63.86656500035315,
+    61.27363899940974,
+    63.91327600067598,
+    61.184074002085254,
+    60.40145600127289
+  ],
+  "max_ms": 67.31554900034098,
+  "method": "input delivery through leading/trailing-edge screenshot assertions, including grim PNG encoding and external PNG reader; not mouse-to-photon measurement"
+}

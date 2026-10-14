@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Noctalia GIF Player
+Comment=Browse and control GIF overlays in a native application window
+Comment[de]=GIF-Overlays in einem nativen Anwendungsfenster verwalten
+Exec=gif-player app
+Terminal=false
+Categories=Graphics;
+StartupWMClass=io.github.madebycli.NoctaliaGifPlayer

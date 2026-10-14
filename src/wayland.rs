@@ -24,6 +24,10 @@ use smithay_client_toolkit::{
             Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
             LayerSurfaceConfigure,
         },
+        xdg::{
+            XdgShell,
+            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
+        },
     },
     shm::{
         Shm, ShmHandler,
@@ -82,9 +86,45 @@ struct Swap {
     scene: Scene,
     initialized: bool,
 }
+enum Presentation {
+    Layer(LayerSurface),
+    Window(Window),
+}
+impl Presentation {
+    fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            Self::Layer(layer) => layer.wl_surface(),
+            Self::Window(window) => window.wl_surface(),
+        }
+    }
+    fn commit(&self) {
+        match self {
+            Self::Layer(layer) => layer.commit(),
+            Self::Window(window) => window.commit(),
+        }
+    }
+    fn set_size(&self, width: u32, height: u32) {
+        if let Self::Layer(layer) = self {
+            layer.set_size(width, height);
+        }
+    }
+    fn set_layer(&self, value: Layer) {
+        if let Self::Layer(layer) = self {
+            layer.set_layer(value);
+        }
+    }
+    fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32) {
+        if let Self::Layer(layer) = self {
+            layer.set_margin(top, right, bottom, left);
+        }
+    }
+    fn is_layer(&self, other: &LayerSurface) -> bool {
+        matches!(self, Self::Layer(layer) if layer == other)
+    }
+}
 struct Surface {
     spec: Spec,
-    layer: LayerSurface,
+    layer: Presentation,
     pool: SlotPool,
     buffers: Vec<Swap>,
     viewport: Option<WpViewport>,
@@ -94,6 +134,7 @@ struct Surface {
     ready: bool,
     needs_draw: bool,
     presented: bool,
+    presented_scene: Scene,
     width: u32,
     height: u32,
     frames: u64,
@@ -124,6 +165,7 @@ pub struct State {
     output: OutputState,
     compositor: CompositorState,
     layer_shell: LayerShell,
+    xdg_shell: Option<XdgShell>,
     shm: Shm,
     viewporter: Option<WpViewporter>,
     fractional: Option<WpFractionalScaleManagerV1>,
@@ -171,6 +213,7 @@ pub fn connect(engine: Engine) -> Result<(Connection, EventQueue<State>, State)>
         output: OutputState::new(&globals, &qh),
         compositor,
         layer_shell,
+        xdg_shell: XdgShell::bind(&globals, &qh).ok(),
         shm,
         viewporter,
         fractional,
@@ -435,9 +478,9 @@ impl State {
         if self.ui.open {
             if let Some(output) = self.engine.outputs.first() {
                 specs.insert(
-                    "ui".into(),
+                    if self.ui.windowed { "app" } else { "ui" }.into(),
                     Spec {
-                        key: "ui".into(),
+                        key: if self.ui.windowed { "app" } else { "ui" }.into(),
                         output: output.name.clone(),
                         layer: "overlay".into(),
                         canvas: false,
@@ -459,26 +502,40 @@ impl State {
             if !self.surfaces.contains_key(key) {
                 let output = self.output_proxy(&spec.output);
                 let surface = self.compositor.create_surface(qh);
-                let layer = self.layer_shell.create_layer_surface(
-                    qh,
-                    surface.clone(),
-                    layer(&spec.layer),
-                    Some("noctalia-gif-player"),
-                    output.as_ref(),
-                );
-                layer.set_anchor(if spec.ui {
-                    Anchor::empty()
+                let layer = if spec.key == "app" {
+                    let shell = self
+                        .xdg_shell
+                        .as_ref()
+                        .context("xdg-shell is required for the application window")?;
+                    let window =
+                        shell.create_window(surface.clone(), WindowDecorations::RequestServer, qh);
+                    window.set_title("Noctalia GIF Player");
+                    window.set_app_id("io.github.madebycli.NoctaliaGifPlayer");
+                    window.set_min_size(Some((640, 420)));
+                    Presentation::Window(window)
                 } else {
-                    Anchor::TOP | Anchor::LEFT
-                });
-                layer.set_exclusive_zone(-1);
-                layer.set_keyboard_interactivity(if spec.ui {
-                    KeyboardInteractivity::OnDemand
-                } else {
-                    KeyboardInteractivity::None
-                });
-                layer.set_size(spec.width, spec.height);
-                layer.set_margin(spec.y, 0, 0, spec.x);
+                    let layer = self.layer_shell.create_layer_surface(
+                        qh,
+                        surface.clone(),
+                        layer(&spec.layer),
+                        Some("noctalia-gif-player"),
+                        output.as_ref(),
+                    );
+                    layer.set_anchor(if spec.ui {
+                        Anchor::empty()
+                    } else {
+                        Anchor::TOP | Anchor::LEFT
+                    });
+                    layer.set_exclusive_zone(-1);
+                    layer.set_keyboard_interactivity(if spec.ui {
+                        KeyboardInteractivity::OnDemand
+                    } else {
+                        KeyboardInteractivity::None
+                    });
+                    layer.set_size(spec.width, spec.height);
+                    layer.set_margin(spec.y, 0, 0, spec.x);
+                    Presentation::Layer(layer)
+                };
                 let region = Region::new(&self.compositor)?;
                 if spec.ui {
                     region.add(0, 0, spec.width as i32, spec.height as i32);
@@ -514,6 +571,7 @@ impl State {
                         ready: true,
                         needs_draw: true,
                         presented: false,
+                        presented_scene: Scene::new(),
                         width: spec.width,
                         height: spec.height,
                         frames: 0,
@@ -630,6 +688,12 @@ impl State {
                             flip_h: widget.settings.flip_h,
                             flip_v: widget.settings.flip_v,
                             editing: !widget.settings.locked,
+                            edit_color: 0xff000000
+                                | self.engine.store.settings["appearance"]["palette"]["primary"]
+                                    .as_str()
+                                    .and_then(|v| v.strip_prefix('#'))
+                                    .and_then(|v| u32::from_str_radix(v, 16).ok())
+                                    .unwrap_or(0xcbb9ff),
                         },
                     })
                 })
@@ -674,7 +738,14 @@ impl State {
                     h: bh as i32,
                 })
             } else {
-                render::damage(&swap.scene, &next)
+                // SHM upload damage is relative to the last committed image, while recycled
+                // buffer repair is relative to that buffer's older contents. Both matter.
+                let repair = render::damage(&swap.scene, &next);
+                let presentation = render::damage(&surface.presented_scene, &next);
+                match (repair, presentation) {
+                    (Some(a), Some(b)) => Some(a.union(&b)),
+                    (a, b) => a.or(b),
+                }
             };
             let bytes = swap
                 .buffer
@@ -695,12 +766,13 @@ impl State {
                         );
                     }
                 } else {
-                    render::paint(bytes, bw, bh, &items, &dirty);
+                    render::paint(bytes, bw, bh, &items, &dirty)?;
                 }
                 if let Some(d) = dirty.clip(bw as i32, bh as i32) {
                     surface.layer.wl_surface().damage_buffer(d.x, d.y, d.w, d.h);
                 }
             }
+            surface.presented_scene = next.clone();
             swap.scene = next;
             swap.initialized = true;
             if let Some(viewport) = &surface.viewport {
@@ -854,10 +926,10 @@ impl LayerShellHandler for State {
         let key = self
             .surfaces
             .iter()
-            .find(|(_, s)| s.layer == *layer)
+            .find(|(_, s)| s.layer.is_layer(layer))
             .map(|(k, _)| k.clone());
         if let Some(key) = key {
-            if key == "ui" {
+            if key == "ui" || key == "app" {
                 self.ui.open = false;
             }
             self.surfaces.remove(&key);
@@ -871,7 +943,7 @@ impl LayerShellHandler for State {
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
-        if let Some(s) = self.surfaces.values_mut().find(|s| s.layer == *layer) {
+        if let Some(s) = self.surfaces.values_mut().find(|s| s.layer.is_layer(layer)) {
             let width = if configure.new_size.0 > 0 {
                 configure.new_size.0
             } else {
@@ -890,6 +962,52 @@ impl LayerShellHandler for State {
             s.configured = true;
             s.ready = true;
             s.needs_draw = true;
+        }
+    }
+}
+impl WindowHandler for State {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &Window) {
+        if self
+            .surfaces
+            .values()
+            .any(|surface| surface.layer.wl_surface() == window.wl_surface())
+        {
+            self.ui.open = false;
+        }
+    }
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        window: &Window,
+        configure: WindowConfigure,
+        _: u32,
+    ) {
+        if let Some(surface) = self
+            .surfaces
+            .values_mut()
+            .find(|surface| surface.layer.wl_surface() == window.wl_surface())
+        {
+            let width = configure
+                .new_size
+                .0
+                .map_or(surface.spec.width, |width| width.get());
+            let height = configure
+                .new_size
+                .1
+                .map_or(surface.spec.height, |height| height.get());
+            if (width, height) != (surface.width, surface.height) {
+                surface.width = width;
+                surface.height = height;
+                surface.buffers.clear();
+                if let Ok(pool) = SlotPool::new(4, &self.shm) {
+                    surface.pool = pool;
+                }
+            }
+            surface.configured = true;
+            surface.ready = true;
+            surface.needs_draw = true;
+            self.ui.dirty = true;
         }
     }
 }
@@ -1033,7 +1151,7 @@ impl PointerHandler for State {
                             self.drag = Some(Drag {
                                 id: id.clone(),
                                 start: position,
-                                origin: (w.settings.x, w.settings.y),
+                                origin: w.position,
                                 pointer: pointer.clone(),
                             });
                             self.last_click = Some((id, time));
@@ -1057,32 +1175,18 @@ impl PointerHandler for State {
                     if let Some(drag) = &self.drag {
                         if &drag.pointer == pointer {
                             let id = drag.id.clone();
-                            let mut target = (
+                            let target = (
                                 drag.origin.0 + position.0 - drag.start.0,
                                 drag.origin.1 + position.1 - drag.start.1,
                             );
-                            if let Some(w) = self.engine.widgets.get(&id) {
-                                if !w.settings.locked {
-                                    target.0 = crate::model::snap(
-                                        target.0,
-                                        w.bounds.0 as f64,
-                                        w.size.0 as f64,
-                                    );
-                                    target.1 = crate::model::snap(
-                                        target.1,
-                                        w.bounds.1 as f64,
-                                        w.size.1 as f64,
-                                    );
-                                    self.engine.dispatch(
-                                        &json!({"action":"move","id":id,"x":target.0,"y":target.1}),
-                                    );
-                                }
-                            }
+                            self.engine.drag_to(&id, target);
                         }
                     }
                 }
                 PointerEventKind::Release { button: 0x110, .. } => {
-                    self.drag = None;
+                    if let Some(drag) = self.drag.take() {
+                        self.engine.finish_drag(&drag.id);
+                    }
                 }
                 PointerEventKind::Axis { vertical, .. } => {
                     if let Some(id) = hit {

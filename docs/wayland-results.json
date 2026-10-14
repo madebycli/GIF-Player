@@ -12,6 +12,9 @@
     "two outputs",
     "fractional scale",
     "standalone UI interaction",
+    "normal tiled application window",
+    "native resolution under cache pressure",
+    "unsnapped visual drag",
     "output removal"
   ]
 }

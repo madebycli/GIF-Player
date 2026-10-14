@@ -50,6 +50,7 @@ pub struct Signature {
     pub flip_h: bool,
     pub flip_v: bool,
     pub editing: bool,
+    pub edit_color: u32,
 }
 pub struct Item {
     pub id: String,
@@ -78,9 +79,15 @@ pub fn damage(before: &Scene, after: &Scene) -> Option<Rect> {
     result
 }
 /// wl_shm ARGB8888 is a native-endian premultiplied pixel. Only damaged rows are cleared/composited.
-pub fn paint(bytes: &mut [u8], width: u32, height: u32, items: &[Item], dirty: &Rect) {
+pub fn paint(
+    bytes: &mut [u8],
+    width: u32,
+    height: u32,
+    items: &[Item],
+    dirty: &Rect,
+) -> anyhow::Result<()> {
     let Some(dirty) = dirty.clip(width as i32, height as i32) else {
-        return;
+        return Ok(());
     };
     for y in dirty.y..dirty.y + dirty.h {
         let start = (y as usize * width as usize + dirty.x as usize) * 4;
@@ -103,11 +110,24 @@ pub fn paint(bytes: &mut [u8], width: u32, height: u32, items: &[Item], dirty: &
             continue;
         };
         let anim = &item.animation;
-        let frame = &anim.frames[sig.frame.min(anim.frames.len() - 1)];
+        let frame = anim.pixels(sig.frame.min(anim.frames.len() - 1))?;
         let opacity = (sig.opacity * 255.0).round() as u16;
+        let smooth = anim.width != rect.w as u32 || anim.height != rect.h as u32;
+        let x_plan = if smooth {
+            (intersection.x..intersection.x + intersection.w)
+                .map(|x| sample_axis(x, rect.x, rect.w, anim.width, sig.flip_h))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let step = anim.width as usize / rect.w as usize;
         let remainder_step = anim.width as usize % rect.w as usize;
         for y in intersection.y..intersection.y + intersection.h {
+            let y_plan = if smooth {
+                sample_axis(y, rect.y, rect.h, anim.height, sig.flip_v)
+            } else {
+                (0, 0, 0)
+            };
             let mut sy = ((y - rect.y) as u64 * anim.height as u64 / rect.h as u64) as usize;
             if sig.flip_v {
                 sy = anim.height as usize - 1 - sy;
@@ -126,7 +146,18 @@ pub fn paint(bytes: &mut [u8], width: u32, height: u32, items: &[Item], dirty: &
                 if sig.flip_h {
                     sx = anim.width as usize - 1 - sx;
                 }
-                let src = &frame.pixels[(sy * anim.width as usize + sx) * 4..][..4];
+                let filtered;
+                let src = if smooth {
+                    filtered = bilinear(
+                        &frame,
+                        anim.width,
+                        x_plan[(x - intersection.x) as usize],
+                        y_plan,
+                    );
+                    &filtered[..]
+                } else {
+                    &frame[(sy * anim.width as usize + sx) * 4..][..4]
+                };
                 let alpha = (src[3] as u16 * opacity + 127) / 255;
                 if alpha == 0 {
                     continue;
@@ -169,12 +200,65 @@ pub fn paint(bytes: &mut [u8], width: u32, height: u32, items: &[Item], dirty: &
                         || rect.y + rect.h - y <= 2
                     {
                         let at = (y as usize * width as usize + x as usize) * 4;
-                        bytes[at..at + 4].copy_from_slice(&0xff_fff59bu32.to_ne_bytes());
+                        bytes[at..at + 4].copy_from_slice(&sig.edit_color.to_ne_bytes());
                     }
                 }
             }
         }
     }
+    Ok(())
+}
+
+fn sample_axis(
+    position: i32,
+    origin: i32,
+    target: i32,
+    source: u32,
+    flip: bool,
+) -> (usize, usize, u32) {
+    let max = (source as i64 - 1) * 256;
+    let mut fixed = (((2 * (position - origin) as i64 + 1) * source as i64 - target as i64) * 128
+        / target as i64)
+        .clamp(0, max);
+    if flip {
+        fixed = max - fixed;
+    }
+    let low = (fixed / 256) as usize;
+    (
+        low,
+        (low + 1).min(source as usize - 1),
+        (fixed % 256) as u32,
+    )
+}
+fn bilinear(
+    pixels: &[u8],
+    width: u32,
+    (x0, x1, fx): (usize, usize, u32),
+    (y0, y1, fy): (usize, usize, u32),
+) -> [u8; 4] {
+    let offsets = [
+        (y0 * width as usize + x0) * 4,
+        (y0 * width as usize + x1) * 4,
+        (y1 * width as usize + x0) * 4,
+        (y1 * width as usize + x1) * 4,
+    ];
+    let weights = [
+        (256 - fx) * (256 - fy),
+        fx * (256 - fy),
+        (256 - fx) * fy,
+        fx * fy,
+    ];
+    let mut result = [0; 4];
+    for (channel, result) in result.iter_mut().enumerate() {
+        *result = ((offsets
+            .iter()
+            .zip(weights)
+            .map(|(offset, weight)| pixels[offset + channel] as u32 * weight)
+            .sum::<u32>()
+            + 32768)
+            >> 16) as u8;
+    }
+    result
 }
 
 #[cfg(test)]
@@ -184,6 +268,7 @@ mod tests {
     #[test]
     fn transparency_flip_and_partial_damage() {
         let anim = Arc::new(Animation {
+            backing: None,
             width: 2,
             height: 1,
             logical_size: (2, 1),
@@ -210,6 +295,7 @@ mod tests {
                 flip_h: true,
                 flip_v: false,
                 editing: false,
+                edit_color: 0xffcbb9ff,
             },
         }];
         let mut pixels = vec![0; 16];
@@ -224,7 +310,8 @@ mod tests {
                 w: 4,
                 h: 1,
             },
-        );
+        )
+        .unwrap();
         assert_eq!(
             u32::from_ne_bytes(pixels[..4].try_into().unwrap()),
             0x80000080
@@ -237,7 +324,7 @@ mod tests {
         items[0].signature.rect.x = 2;
         let after = scene(&items);
         let d = damage(&before, &after).unwrap();
-        paint(&mut pixels, 4, 1, &items, &d);
+        paint(&mut pixels, 4, 1, &items, &d).unwrap();
         assert_eq!(&pixels[..8], &[0; 8]);
         assert!(damage(&after, &after).is_none());
     }

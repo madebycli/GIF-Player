@@ -1,6 +1,6 @@
 [package]
 name = "noctalia-gif-player"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.86"
 description = "Native Rust Wayland GIF overlays and Noctalia 5 integration"
@@ -22,6 +22,8 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
 fontdue = { version = "0.9", default-features = false, features = ["std"] }
 libc = "0.2"
+flate2 = "1"
+toml_edit = "0.23"
 
 [dev-dependencies]
 tempfile = "3"

@@ -11,6 +11,7 @@ use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Transform};
 #[derive(Clone)]
 pub enum Action {
     Command(Value),
+    ToggleGif(PathBuf),
     Tab(usize),
     Close,
     Page(i32),
@@ -32,6 +33,11 @@ pub struct Hit {
 }
 pub struct Ui {
     pub open: bool,
+    pub windowed: bool,
+    mode: String,
+    theme: Theme,
+    appearance: Value,
+    viewport_height: i32,
     pub tab: usize,
     pub dirty: bool,
     pub page: usize,
@@ -54,6 +60,11 @@ impl Ui {
     pub fn new() -> Self {
         Self {
             open: false,
+            windowed: false,
+            mode: "picker".into(),
+            theme: Theme::default(),
+            appearance: Value::Null,
+            viewport_height: 500,
             tab: 0,
             dirty: true,
             page: 0,
@@ -74,9 +85,41 @@ impl Ui {
         }
     }
     pub fn show(&mut self, mode: &str, engine: &mut Engine) -> Result<()> {
-        self.tab = usize::from(mode == "control");
+        self.windowed = mode == "app";
+        self.mode = mode.into();
+        self.tab = match mode {
+            "control" => 1,
+            "settings" => 3,
+            _ => 0,
+        };
+        self.scroll = 0;
+        self.sync_appearance(engine);
+        self.load_font(engine)?;
+
         self.dirty = true;
         self.focus = Some("search".into());
+        self.refresh(engine)?;
+        self.open = true;
+        Ok(())
+    }
+    fn sync_appearance(&mut self, engine: &Engine) {
+        let appearance = engine
+            .store
+            .settings
+            .get("appearance")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if appearance != self.appearance {
+            if appearance["font_family"] != self.appearance["font_family"] {
+                self.font = None;
+                self.glyphs.clear();
+            }
+            self.theme = Theme::from_palette(&appearance["palette"]);
+            self.appearance = appearance;
+            self.dirty = true;
+        }
+    }
+    fn load_font(&mut self, engine: &Engine) -> Result<()> {
         if self.font.is_none() {
             let chosen = engine
                 .store
@@ -86,7 +129,13 @@ impl Ui {
                 .map(PathBuf::from)
                 .or_else(|| {
                     Command::new("fc-match")
-                        .args(["-f", "%{file}", "sans-serif"])
+                        .args([
+                            "-f",
+                            "%{file}",
+                            self.appearance["font_family"]
+                                .as_str()
+                                .unwrap_or("sans-serif"),
+                        ])
                         .output()
                         .ok()
                         .filter(|o| o.status.success())
@@ -116,8 +165,6 @@ impl Ui {
                     .map_err(|e| anyhow::anyhow!(e))?,
             );
         }
-        self.refresh(engine)?;
-        self.open = true;
         Ok(())
     }
     pub fn refresh(&mut self, engine: &mut Engine) -> Result<()> {
@@ -127,6 +174,12 @@ impl Ui {
         Ok(())
     }
     pub fn sync(&mut self, engine: &Engine) {
+        self.sync_appearance(engine);
+        if self.open {
+            if let Err(error) = self.load_font(engine) {
+                self.error = Some(error.to_string());
+            }
+        }
         if self.revision != engine.revision {
             self.revision = engine.revision;
             self.dirty = true;
@@ -168,11 +221,13 @@ impl Ui {
             return;
         }
         let files = self.filtered();
-        let page = self.page.min(files.len().saturating_sub(1) / 8);
-        self.page = page;
-        engine.previews = files.into_iter().skip(page * 8).take(8).collect();
+        let first = (self.scroll / 150).max(0) as usize;
+        engine.previews = files.into_iter().skip(first * 3).take(18).collect();
         for path in engine.previews.clone() {
             if let Err(e) = engine.request_thumbnail(path) {
+                if e.to_string().contains("Thumbnail queue is busy") {
+                    break;
+                }
                 self.error = Some(e.to_string());
             }
         }
@@ -187,6 +242,24 @@ impl Ui {
     }
     pub fn activate(&mut self, action: Action, engine: &mut Engine) {
         match action {
+            Action::ToggleGif(path) => {
+                let ids = engine
+                    .widgets
+                    .values()
+                    .filter(|w| w.path == path)
+                    .map(|w| w.id.clone())
+                    .collect::<Vec<_>>();
+                if ids.is_empty() {
+                    self.activate(
+                        Action::Command(json!({"action":"spawn","gif":path})),
+                        engine,
+                    );
+                } else {
+                    for id in ids {
+                        self.activate(Action::Command(json!({"action":"quit","id":id})), engine);
+                    }
+                }
+            }
             Action::Command(cmd) => {
                 let result = engine.dispatch(&cmd);
                 self.error = result
@@ -280,33 +353,23 @@ impl Ui {
             self.dirty = true;
         }
     }
+    fn hover_path(&self) -> Option<PathBuf> {
+        let hit = self.hits.get(self.hovered?)?;
+        match &hit.action {
+            Action::ToggleGif(path) => Some(path.clone()),
+            _ => None,
+        }
+    }
     pub fn request_hover(&self, engine: &mut Engine) {
-        if let Some(index) = self.hovered {
-            if let Some(Hit {
-                action: Action::Command(cmd),
-                ..
-            }) = self.hits.get(index)
-            {
-                if cmd["action"] == "spawn" {
-                    if let Some(path) = cmd["gif"].as_str() {
-                        let _ = engine.request_asset(PathBuf::from(path));
-                    }
-                }
-            }
+        if let Some(path) = self.hover_path() {
+            let _ = engine.request_asset(path);
         }
     }
     pub fn preview_deadline(&self, engine: &Engine) -> Option<std::time::Duration> {
         if !self.open || self.tab != 0 {
             return None;
         }
-        let index = self.hovered?;
-        let Action::Command(cmd) = &self.hits.get(index)?.action else {
-            return None;
-        };
-        if cmd["action"] != "spawn" {
-            return None;
-        }
-        let path = PathBuf::from(cmd["gif"].as_str()?);
+        let path = self.hover_path()?;
         let animation = engine.assets.get(&path)?.animation.as_ref()?;
         if animation.frames.len() < 2 {
             return None;
@@ -375,6 +438,36 @@ impl Ui {
             &path.finish().unwrap(),
             &paint,
             tiny_skia::FillRule::Winding,
+            Transform::from_scale(self.paint_scale, self.paint_scale),
+            None,
+        );
+    }
+    fn outline(&mut self, pix: &mut Pixmap, rect: &Rect, color: Color, radius: f32) {
+        let mut path = PathBuilder::new();
+        let x = rect.x as f32;
+        let y = rect.y as f32;
+        let w = rect.w as f32;
+        let h = rect.h as f32;
+        let r = radius.min(w / 2.0).min(h / 2.0);
+        path.move_to(x + r, y);
+        path.line_to(x + w - r, y);
+        path.quad_to(x + w, y, x + w, y + r);
+        path.line_to(x + w, y + h - r);
+        path.quad_to(x + w, y + h, x + w - r, y + h);
+        path.line_to(x + r, y + h);
+        path.quad_to(x, y + h, x, y + h - r);
+        path.line_to(x, y + r);
+        path.quad_to(x, y, x + r, y);
+        path.close();
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        pix.stroke_path(
+            &path.finish().unwrap(),
+            &paint,
+            &tiny_skia::Stroke {
+                width: 1.0,
+                ..Default::default()
+            },
             Transform::from_scale(self.paint_scale, self.paint_scale),
             None,
         );
@@ -451,11 +544,11 @@ impl Ui {
             pix,
             &rect,
             if active {
-                accent()
+                self.theme.primary
             } else if hovered {
-                Color::from_rgba8(66, 64, 80, 255)
+                self.theme.hover
             } else {
-                variant()
+                self.theme.variant
             },
             6.0,
         );
@@ -466,17 +559,21 @@ impl Ui {
             y + 10,
             14,
             if active {
-                Color::from_rgba8(22, 21, 32, 255)
+                self.theme.on_primary
             } else {
-                foreground()
+                self.theme.foreground
             },
             w - 24,
         );
+        if !active {
+            self.outline(pix, &rect, self.theme.outline, 6.0);
+        }
         self.hits.push(Hit { rect, action });
     }
     fn input(&mut self, pix: &mut Pixmap, key: &str, hint: &str, x: i32, y: i32, w: i32) {
         let rect = Rect { x, y, w, h: 38 };
-        self.rect(pix, &rect, variant(), 6.0);
+        self.rect(pix, &rect, self.theme.variant, 6.0);
+        self.outline(pix, &rect, self.theme.outline, 6.0);
         let text = self
             .fields
             .get(key)
@@ -484,7 +581,15 @@ impl Ui {
             .map(String::as_str)
             .unwrap_or(hint)
             .to_string();
-        self.text(pix, &text, x + 12, y + 10, 14, foreground(), w - 24);
+        self.text(
+            pix,
+            &text,
+            x + 12,
+            y + 10,
+            14,
+            self.theme.foreground,
+            w - 24,
+        );
         if self.focus.as_deref() == Some(key) {
             self.rect(
                 pix,
@@ -494,7 +599,7 @@ impl Ui {
                     w: w - 16,
                     h: 2,
                 },
-                accent(),
+                self.theme.primary,
                 0.0,
             );
         }
@@ -514,106 +619,109 @@ impl Ui {
         self.rect(
             &mut pix,
             &Rect { x: 0, y: 0, w, h },
-            Color::from_rgba8(26, 25, 35, 250),
+            self.theme.surface,
             12.0,
         );
-        self.text(
-            &mut pix,
-            "Noctalia GIF Player",
-            20,
-            18,
-            20,
-            foreground(),
-            w - 80,
-        );
-        self.button(&mut pix, "×", w - 52, 12, 36, Action::Close, false);
-        for (i, title) in ["Collection", "Active", "Profiles", "Settings"]
-            .iter()
-            .enumerate()
-        {
+        let title = ["GIFs", "Playback", "Layouts", "Settings"][self.tab];
+        self.text(&mut pix, title, 20, 18, 18, self.theme.primary, w - 100);
+        self.button(&mut pix, "×", w - 50, 10, 34, Action::Close, false);
+        let offset_x = if self.windowed {
+            if w < 800 { 112 } else { 172 }
+        } else {
+            0
+        };
+        if self.windowed {
+            for (i, label) in ["GIFs", "Playback", "Layouts", "Settings"]
+                .iter()
+                .enumerate()
+            {
+                self.button(
+                    &mut pix,
+                    label,
+                    12,
+                    64 + i as i32 * 48,
+                    offset_x - 24,
+                    Action::Tab(i),
+                    self.tab == i,
+                );
+            }
+        } else {
             self.button(
                 &mut pix,
-                title,
-                20 + i as i32 * 126,
-                58,
-                118,
-                Action::Tab(i),
-                i == self.tab,
+                "⚙",
+                w - 92,
+                10,
+                34,
+                Action::Command(json!({"action":"settings-ui"})),
+                false,
             );
-        }
-        let all_paused =
-            !engine.widgets.is_empty() && engine.widgets.values().all(|w| w.settings.paused);
-        let all_locked = engine.widgets.values().all(|w| w.settings.locked);
-        for (i, (title, action)) in [
-            (
-                if all_paused { "Play all" } else { "Pause all" },
-                if all_paused { "play" } else { "pause" },
-            ),
-            (
-                if all_locked { "Edit" } else { "Lock" },
-                if all_locked { "unlock" } else { "lock" },
-            ),
-            ("Show all", "show"),
-            ("Hide all", "hide"),
-            ("Stop all", "stop-all"),
-        ]
-        .iter()
-        .enumerate()
-        {
             self.button(
                 &mut pix,
-                title,
-                20 + i as i32 * 116,
-                108,
-                108,
-                Action::Command(json!({"action":action,"id":"*"})),
+                "◫",
+                w - 134,
+                10,
+                34,
+                Action::Command(json!({"action":"app"})),
                 false,
             );
         }
-        let body_height = h.max(760);
-        self.scroll_max = body_height - h;
+        let body_width = width.saturating_sub(offset_x as u32);
+        let body_height = (h + 94).max(760);
+        self.viewport_height = h - 96;
+        self.scroll_max = if self.tab == 0 {
+            (self.filtered().len().div_ceil(3) as i32 * 150 + 100 - self.viewport_height).max(0)
+        } else {
+            (body_height - h).max(0)
+        };
         self.scroll = self.scroll.clamp(0, self.scroll_max);
-        let mut body =
-            Pixmap::new(physical_width, (body_height as f64 * scale).ceil() as u32).unwrap();
-        body.fill(Color::from_rgba8(26, 25, 35, 250));
+        let mut body = Pixmap::new(
+            (body_width as f64 * scale).ceil() as u32,
+            (body_height as f64 * scale).ceil() as u32,
+        )
+        .unwrap();
+        body.fill(self.theme.surface);
         let header_hits = self.hits.len();
         match self.tab {
-            0 => self.library(&mut body, engine, w, body_height),
-            1 => self.active(&mut body, engine, w, body_height),
-            2 => self.profiles(&mut body, engine, w, body_height),
-            _ => self.settings(&mut body, engine, w, body_height),
+            0 => self.library(&mut body, engine, body_width as i32, body_height),
+            1 => self.active(&mut body, engine, body_width as i32, body_height),
+            2 => self.profiles(&mut body, engine, body_width as i32, body_height),
+            _ => self.settings(&mut body, engine, body_width as i32, body_height),
         }
-        let body_start = (158.0 * scale).ceil() as u32;
-        let body_end = ((h - 32).max(158) as f64 * scale).ceil() as u32;
-        let offset = (self.scroll as f64 * scale).round() as u32;
-        for y in body_start..body_end {
-            let source = ((y + offset) as usize * physical_width as usize) * 4;
-            let destination = y as usize * physical_width as usize * 4;
-            pix.data_mut()[destination..destination + physical_width as usize * 4]
-                .copy_from_slice(&body.data()[source..source + physical_width as usize * 4]);
+        let top = (64.0 * scale).ceil() as u32;
+        let bottom = ((h - 32).max(64) as f64 * scale).ceil() as u32;
+        let source_offset =
+            ((94 + if self.tab == 0 { 0 } else { self.scroll }) as f64 * scale).round() as u32;
+        let left = (offset_x as f64 * scale).round() as usize;
+        let stride = body.width() as usize * 4;
+        for y in top..bottom {
+            let source = (y + source_offset) as usize * stride;
+            let destination = (y as usize * physical_width as usize + left) * 4;
+            pix.data_mut()[destination..destination + stride]
+                .copy_from_slice(&body.data()[source..source + stride]);
         }
         let mut body_hits = self.hits.split_off(header_hits);
         for hit in &mut body_hits {
-            hit.rect.y -= self.scroll;
+            hit.rect.x += offset_x;
+            hit.rect.y -= 94 + if self.tab == 0 { 0 } else { self.scroll };
             let bottom = (hit.rect.y + hit.rect.h).min(h - 32);
-            hit.rect.y = hit.rect.y.max(158);
+            hit.rect.y = hit.rect.y.max(64);
             hit.rect.h = (bottom - hit.rect.y).max(0);
         }
         self.hits
             .extend(body_hits.into_iter().filter(|hit| hit.rect.h > 0));
         if self.scroll_max > 0 {
-            let viewport = h - 190;
-            let thumb = (viewport as f64 * h as f64 / body_height as f64).max(24.0) as i32;
-            let y = 158 + (viewport - thumb) * self.scroll / self.scroll_max;
+            let viewport = h - 96;
+            let thumb = (viewport as f64 * viewport as f64 / (viewport + self.scroll_max) as f64)
+                .max(24.0) as i32;
             self.rect(
                 &mut pix,
                 &Rect {
-                    x: w - 9,
-                    y,
-                    w: 4,
+                    x: w - 8,
+                    y: 64 + (viewport - thumb) * self.scroll / self.scroll_max,
+                    w: 3,
                     h: thumb,
                 },
-                muted(),
+                self.theme.outline,
                 2.0,
             );
         }
@@ -622,13 +730,7 @@ impl Ui {
             .as_ref()
             .or(engine.error.as_ref())
             .cloned()
-            .unwrap_or_else(|| {
-                format!(
-                    "{} active · {:.1} MiB decoded · native Wayland",
-                    engine.widgets.len(),
-                    engine.assets.values().map(|a| a.reserved).sum::<usize>() as f64 / 1048576.0
-                )
-            });
+            .unwrap_or_else(|| format!("{} active", engine.widgets.len()));
         self.text(
             &mut pix,
             &status,
@@ -638,29 +740,30 @@ impl Ui {
             if self.error.is_some() {
                 Color::from_rgba8(255, 170, 170, 255)
             } else {
-                muted()
+                self.theme.muted
             },
             w - 40,
         );
         self.dirty = false;
         pix
     }
-    fn library(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) {
+    fn library(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, _h: i32) {
         self.input(pix, "search", "Search GIFs and folders…", 20, 158, w - 152);
         self.button(pix, "Refresh", w - 124, 158, 104, Action::Refresh, false);
         let files = self.filtered();
-        let cell = (w - 52) / 4;
-        let rowheight = ((h - 284) / 2).max(100);
-        for (index, path) in files.iter().skip(self.page * 8).take(8).enumerate() {
-            let x = 20 + (index % 4) as i32 * (cell + 4);
-            let y = 210 + (index / 4) as i32 * rowheight;
+        let cell = (w - 64) / 3;
+        let rowheight = 150;
+        let first = (self.scroll / rowheight).max(0) as usize;
+        for (index, path) in files.iter().enumerate().skip(first * 3).take(18) {
+            let x = 20 + (index % 3) as i32 * (cell + 12);
+            let y = 210 + (index / 3) as i32 * rowheight - self.scroll;
             let rect = Rect {
                 x,
                 y,
                 w: cell,
                 h: rowheight - 10,
             };
-            self.rect(pix, &rect, variant(), 9.0);
+
             if let Some(anim) = engine
                 .assets
                 .get(path)
@@ -691,6 +794,7 @@ impl Ui {
                         flip_h: false,
                         flip_v: false,
                         editing: false,
+                        edit_color: 0xffcbb9ff,
                     },
                 };
                 composite_preview(pix, &item);
@@ -701,7 +805,7 @@ impl Ui {
                 x + 12,
                 y + rowheight - 44,
                 13,
-                foreground(),
+                self.theme.foreground,
                 cell - 24,
             );
             let active = engine
@@ -716,38 +820,22 @@ impl Ui {
                     x + 12,
                     y + rowheight - 26,
                     11,
-                    accent(),
+                    self.theme.primary,
                     cell - 24,
                 );
             }
             self.hits.push(Hit {
                 rect,
-                action: Action::Command(json!({"action":"spawn","gif":path})),
+                action: Action::ToggleGif(path.clone()),
             });
         }
         if files.is_empty() {
-            self.text(pix,"No matching GIFs. Add files to your collection or change its directory in Settings.",20,230,14,muted(),w-40);
+            self.text(pix,"No matching GIFs. Add files to your collection or change its directory in Settings.",20,230,14,self.theme.muted,w-40);
         }
-        self.button(pix, "Previous", 20, h - 72, 108, Action::Page(-1), false);
-        self.button(pix, "Next", 136, h - 72, 108, Action::Page(1), false);
-        self.text(
-            pix,
-            &format!(
-                "Page {} / {} · {} GIFs",
-                self.page + 1,
-                files.len().div_ceil(8).max(1),
-                files.len()
-            ),
-            260,
-            h - 62,
-            13,
-            muted(),
-            w - 280,
-        );
     }
     fn active(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) {
         let list_width = 220.min(w / 3);
-        let visible = ((h - 250) / 46).max(1) as usize;
+        let visible = ((h - 380) / 46).max(1) as usize;
         let rows = engine
             .widgets
             .values()
@@ -767,6 +855,50 @@ impl Ui {
         }
         self.button(pix, "‹", 20, h - 72, 46, Action::Page(-1), false);
         self.button(pix, "›", 74, h - 72, 46, Action::Page(1), false);
+        self.text(
+            pix,
+            "All GIFs",
+            20,
+            h - 188,
+            12,
+            self.theme.muted,
+            list_width,
+        );
+        let paused = !engine.widgets.is_empty()
+            && engine.widgets.values().all(|widget| widget.settings.paused);
+        let locked = engine.widgets.values().all(|widget| widget.settings.locked);
+        let visible = engine
+            .widgets
+            .values()
+            .any(|widget| widget.settings.visible);
+        for (i, (label, action)) in [
+            (
+                if paused { "Play" } else { "Pause" },
+                if paused { "play" } else { "pause" },
+            ),
+            (
+                if locked { "Edit" } else { "Lock" },
+                if locked { "unlock" } else { "lock" },
+            ),
+            (
+                if visible { "Hide" } else { "Show" },
+                if visible { "hide" } else { "show" },
+            ),
+            ("Stop", "stop-all"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            self.button(
+                pix,
+                label,
+                20 + (i % 2) as i32 * (list_width / 2),
+                h - 164 + (i / 2) as i32 * 44,
+                list_width / 2 - 6,
+                Action::Command(json!({"action":action,"id":"*"})),
+                false,
+            );
+        }
         let Some(widget) = self.selected.as_ref().and_then(|id| engine.widgets.get(id)) else {
             self.text(
                 pix,
@@ -774,7 +906,7 @@ impl Ui {
                 list_width + 40,
                 176,
                 16,
-                muted(),
+                self.theme.muted,
                 w - list_width - 60,
             );
             return;
@@ -783,15 +915,23 @@ impl Ui {
         let cw = w - x - 20;
         let id = &widget.id;
         let s = &widget.settings;
-        self.text(pix, &widget.id, x, 162, 16, foreground(), cw);
-        self.text(pix, &widget.path.to_string_lossy(), x, 186, 11, muted(), cw);
+        self.text(pix, &widget.id, x, 162, 16, self.theme.foreground, cw);
+        self.text(
+            pix,
+            &widget.path.to_string_lossy(),
+            x,
+            186,
+            11,
+            self.theme.muted,
+            cw,
+        );
         for (i, (title, action)) in [
             (
                 if s.paused { "Play" } else { "Pause" },
                 if s.paused { "play" } else { "pause" },
             ),
             (
-                if s.locked { "Unlock" } else { "Lock" },
+                if s.locked { "Edit" } else { "Lock" },
                 if s.locked { "unlock" } else { "lock" },
             ),
             (
@@ -832,7 +972,15 @@ impl Ui {
         .enumerate()
         {
             let y = 314 + i as i32 * 43;
-            self.text(pix, &format!("{label}  {value:.2}"), x, y, 13, muted(), 180);
+            self.text(
+                pix,
+                &format!("{label}  {value:.2}"),
+                x,
+                y,
+                13,
+                self.theme.muted,
+                180,
+            );
             let rect = Rect {
                 x: x + 188,
                 y: y + 4,
@@ -847,7 +995,7 @@ impl Ui {
                     w: rect.w,
                     h: 8,
                 },
-                variant(),
+                self.theme.variant,
                 4.0,
             );
             let fill = (((value - min) / (max - min)) * rect.w as f64) as i32;
@@ -859,8 +1007,30 @@ impl Ui {
                     w: fill.max(1),
                     h: 8,
                 },
-                accent(),
+                self.theme.primary,
                 4.0,
+            );
+            self.rect(
+                pix,
+                &Rect {
+                    x: rect.x + fill - 8,
+                    y: rect.y + 4,
+                    w: 18,
+                    h: 18,
+                },
+                self.theme.on_primary,
+                9.0,
+            );
+            self.outline(
+                pix,
+                &Rect {
+                    x: rect.x + fill - 8,
+                    y: rect.y + 4,
+                    w: 18,
+                    h: 18,
+                },
+                self.theme.primary,
+                9.0,
             );
             self.hits.push(Hit {
                 rect,
@@ -961,6 +1131,18 @@ impl Ui {
                 false,
             );
         }
+        let mut duplicate = serde_json::to_value(&widget.settings).unwrap();
+        duplicate["x"] = json!(widget.settings.x + 30.0);
+        duplicate["y"] = json!(widget.settings.y + 30.0);
+        self.button(
+            pix,
+            "Duplicate",
+            x,
+            680,
+            132,
+            Action::Command(json!({"action":"spawn","gif":widget.path,"state":duplicate})),
+            false,
+        );
     }
     fn profiles(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) {
         self.input(
@@ -1038,7 +1220,7 @@ impl Ui {
             20,
             170,
             14,
-            muted(),
+            self.theme.muted,
             w - 40,
         );
         self.input(
@@ -1074,11 +1256,11 @@ impl Ui {
             20,
             326,
             14,
-            foreground(),
+            self.theme.foreground,
             w - 40,
         );
-        self.text(pix,"Drag unlocked GIFs with the left mouse button. Scroll to resize; right click opens controls.",20,356,14,muted(),w-40);
-        self.text(pix,"Overlay stacking above fullscreen windows depends on your compositor and its configuration.",20,400,14,muted(),w-40);
+        self.text(pix,"Drag unlocked GIFs with the left mouse button. Scroll to resize; right click opens controls.",20,356,14,self.theme.muted,w-40);
+        self.text(pix,"Overlay stacking above fullscreen windows depends on your compositor and its configuration.",20,400,14,self.theme.muted,w-40);
         self.button(
             pix,
             "Reload collection",
@@ -1099,22 +1281,62 @@ impl Ui {
         );
     }
 }
-fn foreground() -> Color {
-    Color::from_rgba8(234, 232, 241, 255)
+#[derive(Clone, Copy)]
+struct Theme {
+    surface: Color,
+    variant: Color,
+    foreground: Color,
+    muted: Color,
+    primary: Color,
+    on_primary: Color,
+    hover: Color,
+    outline: Color,
 }
-fn muted() -> Color {
-    Color::from_rgba8(183, 180, 194, 255)
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            surface: Color::from_rgba8(18, 18, 23, 255),
+            variant: Color::from_rgba8(32, 31, 36, 255),
+            foreground: Color::from_rgba8(224, 222, 230, 255),
+            muted: Color::from_rgba8(189, 186, 198, 255),
+            primary: Color::from_rgba8(204, 185, 255, 255),
+            on_primary: Color::from_rgba8(46, 32, 77, 255),
+            hover: Color::from_rgba8(51, 47, 59, 255),
+            outline: Color::from_rgba8(72, 69, 80, 255),
+        }
+    }
 }
-fn accent() -> Color {
-    Color::from_rgba8(255, 245, 155, 255)
-}
-fn variant() -> Color {
-    Color::from_rgba8(44, 42, 56, 255)
+impl Theme {
+    fn from_palette(palette: &Value) -> Self {
+        let mut theme = Self::default();
+        for (name, target) in [
+            ("surface", &mut theme.surface),
+            ("surface_variant", &mut theme.variant),
+            ("on_surface", &mut theme.foreground),
+            ("on_surface_variant", &mut theme.muted),
+            ("primary", &mut theme.primary),
+            ("on_primary", &mut theme.on_primary),
+            ("hover", &mut theme.hover),
+            ("outline", &mut theme.outline),
+        ] {
+            if let Some(value) = palette[name]
+                .as_str()
+                .and_then(|s| s.strip_prefix('#'))
+                .and_then(|s| u32::from_str_radix(s, 16).ok())
+            {
+                *target =
+                    Color::from_rgba8((value >> 16) as u8, (value >> 8) as u8, value as u8, 255);
+            }
+        }
+        theme
+    }
 }
 fn composite_preview(pix: &mut Pixmap, item: &Item) {
     let anim = &item.animation;
-    let frame = &anim.frames[item.signature.frame];
-    if let Some(source) = tiny_skia::PixmapRef::from_bytes(&frame.pixels, anim.width, anim.height) {
+    let Ok(frame) = anim.pixels(item.signature.frame) else {
+        return;
+    };
+    if let Some(source) = tiny_skia::PixmapRef::from_bytes(&frame, anim.width, anim.height) {
         let rect = &item.signature.rect;
         pix.draw_pixmap(
             0,

@@ -164,7 +164,7 @@ impl Widget {
             .map_or(0, |a| a.frames.len());
         let mut value = serde_json::to_value(&self.settings).unwrap();
         let obj = value.as_object_mut().unwrap();
-        for (key,val) in json!({"ok":true,"id":self.id,"file":self.path,"gif":self.path,"x":self.position.0,"y":self.position.1,"base_position":[self.settings.x,self.settings.y],"size":[self.size.0,self.size.1],"screen":[self.bounds.0,self.bounds.1],"frames":[count,count],"loading":asset.is_some_and(|a| a.animation.is_none()&&a.error.is_none()),"error":asset.and_then(|a| a.error.as_ref()),"warning":asset.and_then(|a| a.animation.as_ref()).and_then(|a| a.warning.as_ref()),"surface_mode":if self.canvas(){"canvas"}else{"compact"},"frame":self.frame}).as_object().unwrap() { obj.insert(key.clone(), val.clone()); }
+        for (key,val) in json!({"ok":true,"id":self.id,"file":self.path,"gif":self.path,"x":self.position.0,"y":self.position.1,"base_position":[self.settings.x,self.settings.y],"size":[self.size.0,self.size.1],"screen":[self.bounds.0,self.bounds.1],"frames":[count,count],"loading":asset.is_some_and(|a| a.animation.is_none()&&a.error.is_none()),"error":asset.and_then(|a| a.error.as_ref()),"warning":asset.and_then(|a| a.animation.as_ref()).and_then(|a| a.warning.as_ref()),"source_size":asset.and_then(|a|a.animation.as_ref()).map(|a|[a.width,a.height]),"frame_storage":asset.and_then(|a|a.animation.as_ref()).map(|a|if a.backing.is_some(){"lossless-disk"}else{"memory"}),"surface_mode":if self.canvas(){"canvas"}else{"compact"},"frame":self.frame}).as_object().unwrap() { obj.insert(key.clone(), val.clone()); }
         // An absent error must stay absent for protocol-v2 clients.
         if obj.get("error").is_some_and(Value::is_null) {
             obj.remove("error");
@@ -288,6 +288,47 @@ impl Engine {
         self.revision += 1;
         self.next_save = Some(self.now() + 0.4);
     }
+    pub fn drag_to(&mut self, id: &str, position: (f64, f64)) {
+        let now = self.now();
+        if let Some(widget) = self.widgets.get_mut(id) {
+            if widget.settings.locked || !position.0.is_finite() || !position.1.is_finite() {
+                return;
+            }
+            widget.settings.x = position.0.clamp(-1e7, 1e7);
+            widget.settings.y = position.1.clamp(-1e7, 1e7);
+            widget.settings.bouncing = false;
+            widget.hop = None;
+            widget.next_jump = now + widget.settings.jump_rate;
+            widget.position = (widget.settings.x, widget.settings.y);
+            widget.dirty = true;
+            self.next_save = Some(now + 0.4);
+            // Pointer events must not serialize snapshots or re-layout frontends at mouse rate.
+            if now >= self.status_deadline {
+                self.revision += 1;
+                self.status_deadline = now + 0.25;
+            }
+        }
+    }
+    pub fn finish_drag(&mut self, id: &str) {
+        if let Some(widget) = self.widgets.get_mut(id) {
+            widget.settings.x = snap(
+                widget.settings.x,
+                widget.bounds.0 as f64,
+                widget.size.0 as f64,
+            );
+            widget.settings.y = snap(
+                widget.settings.y,
+                widget.bounds.1 as f64,
+                widget.size.1 as f64,
+            );
+            widget.position = (widget.settings.x, widget.settings.y);
+            widget.dirty = true;
+            if let Err(error) = remember(&mut self.store, widget) {
+                self.error = Some(error.to_string());
+            }
+            self.changed();
+        }
+    }
     fn random_interval(&mut self, mean: f64) -> f64 {
         self.random ^= self.random << 13;
         self.random ^= self.random >> 7;
@@ -305,7 +346,13 @@ impl Engine {
             available >= 1024 * 1024,
             "Decoded GIF cache budget exhausted; stop widgets or reduce the collection preview page"
         );
-        let budget = available.min(32 * 1024 * 1024);
+        let native = decode::native_dimensions(&path)?;
+        let required = native.0 as usize * native.1 as usize * 4 + 1024 * 1024;
+        ensure!(
+            available >= required,
+            "Not enough cache memory for one native-resolution frame; stop another GIF"
+        );
+        let budget = available.min((32 * 1024 * 1024).max(required));
         let cancel = Arc::new(AtomicBool::new(false));
         self.jobs
             .try_send(DecodeJob {
@@ -590,8 +637,15 @@ impl Engine {
             }
             "list" | "snapshot" | "watch" => return Ok(self.snapshot()),
             "spawn" => return self.spawn(cmd),
-            "picker" | "control" => {
-                self.ui_request = Some(action.into());
+            "picker" | "control" | "app" | "settings-ui" => {
+                self.ui_request = Some(
+                    if action == "settings-ui" {
+                        "settings"
+                    } else {
+                        action
+                    }
+                    .into(),
+                );
                 return Ok(json!({"ok":true}));
             }
             "ui-close" => {
@@ -621,6 +675,38 @@ impl Engine {
             "quit-daemon" => {
                 self.quit = true;
                 return Ok(json!({"ok":true,"daemon":false}));
+            }
+            "appearance" => {
+                let palette = cmd
+                    .get("palette")
+                    .filter(|v| v.is_object())
+                    .context("Missing palette")?;
+                ensure!(
+                    palette.as_object().unwrap().len() <= 24,
+                    "Too many color roles"
+                );
+                for value in palette.as_object().unwrap().values() {
+                    ensure!(
+                        value.as_str().is_some_and(|s| s.len() == 7
+                            && s.starts_with('#')
+                            && s[1..].bytes().all(|c| c.is_ascii_hexdigit())),
+                        "Invalid palette color"
+                    );
+                }
+                let font = cmd
+                    .get("font_family")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sans-serif");
+                ensure!(font.len() <= 256, "Font family too long");
+                let appearance = json!({"palette":palette,"font_family":font});
+                if self.store.settings["appearance"] != appearance {
+                    self.store.settings["appearance"] = appearance;
+                    for widget in self.widgets.values_mut() {
+                        widget.dirty = true;
+                    }
+                    self.changed();
+                }
+                return Ok(json!({"ok":true}));
             }
             "settings" => {
                 if let Some(settings) = cmd.get("settings").and_then(Value::as_object) {
@@ -1126,6 +1212,52 @@ pub fn bounce(position: f64, speed: f64, elapsed: f64, bound: f64, size: f64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drag_motion_is_direct_and_frontend_updates_are_bounded() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            runtime_dir: root.path().join("runtime"),
+            config_dir: root.path().join("config"),
+            cache_dir: root.path().join("cache"),
+            data_dir: root.path().join("data"),
+            gif_dir: root.path().join("gifs"),
+            gif_dir_explicit: true,
+        };
+        let mut engine = Engine::new(paths).unwrap();
+        let settings = Settings {
+            locked: false,
+            ..Settings::default()
+        };
+        engine.widgets.insert(
+            "test".into(),
+            Widget {
+                id: "test".into(),
+                path: root.path().join("test.gif"),
+                settings,
+                frame: 0,
+                position: (100.0, 100.0),
+                size: (100, 100),
+                bounds: (1000, 800),
+                dirty: false,
+                started: 0.0,
+                media_ms: 0.0,
+                hop: None,
+                next_jump: 10.0,
+                bounce_origin: (0.0, 0.0),
+                bounce_start: 0.0,
+            },
+        );
+        for x in 430..470 {
+            engine.drag_to("test", (x as f64, 200.0));
+            assert_eq!(engine.widgets["test"].position, (x as f64, 200.0));
+        }
+        assert!(
+            engine.revision <= 2,
+            "Mouse motion must not rebuild the frontend for each event"
+        );
+        engine.finish_drag("test");
+        assert_eq!(engine.widgets["test"].settings.x, 469.0);
+    }
     #[test]
     fn media_clock_pause_speed_and_motion_base() {
         let mut widget = Widget {

@@ -1,6 +1,6 @@
 id = "madebycli/gif-player"
 name = "Noctalia GIF Player"
-version = "1.0.0"
+version = "1.1.0"
 plugin_api = 30
 author = "madebycli"
 license = "LicenseRef-All-Rights-Reserved"
@@ -32,8 +32,8 @@ entry = "bar.luau"
 [[panel]]
 id = "control"
 entry = "control.luau"
-width = 740
-height = 760
+width = 640
+height = 640
 placement = "attached"
 position = "auto"
 layer = "overlay"
@@ -41,8 +41,8 @@ layer = "overlay"
 [[panel]]
 id = "picker"
 entry = "picker.luau"
-width = 900
-height = 780
+width = 640
+height = 640
 placement = "floating"
 position = "center"
 layer = "overlay"
@@ -50,3 +50,12 @@ layer = "overlay"
 [[shortcut]]
 id = "launcher"
 entry = "shortcut.luau"
+
+[[panel]]
+id = "settings"
+entry = "settings.luau"
+width = 600
+height = 620
+placement = "floating"
+position = "center"
+layer = "overlay"

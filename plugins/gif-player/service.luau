@@ -4,6 +4,7 @@ local queue = {}
 local busy = false
 local started = false
 local frontendNonce = nil
+local lastAppearance = nil
 local pump
 local function send(command, callback)
     local encoded = noctalia.json.encode(command)
@@ -68,6 +69,7 @@ local function start()
         if type(data) == "table" then
             noctalia.state.set("connected", data.ok == true)
             if data.ok then
+                if not data.settings or not data.settings.appearance then lastAppearance = nil end
                 noctalia.state.set("snapshot", data)
                 noctalia.state.set("error", data.error or "")
                 if data.frontend_request and data.frontend_request.nonce ~= frontendNonce then
@@ -85,8 +87,17 @@ local function start()
     end)
     -- Start only when the user opens a panel or issues a command; the bar itself stays idle.
 end
+local function appearance()
+    local palette = {}
+    for _, role in ipairs({"surface", "surface_variant", "on_surface", "on_surface_variant", "primary", "on_primary", "hover", "outline"}) do palette[role] = noctalia.getColor(role) end
+    local shell = noctalia.getSetting("shell") or {}
+    local value = {action = "appearance", palette = palette, font_family = shell.font_family or "sans-serif"}
+    local encoded = noctalia.json.encode(value)
+    if encoded ~= lastAppearance and noctalia.state.get("connected") then lastAppearance = encoded; send(value) end
+end
 function update()
-    noctalia.setUpdateInterval(60000)
+    noctalia.setUpdateInterval(1000)
+    appearance()
     start()
 end
 function onIpc(event)
@@ -99,7 +110,7 @@ noctalia.state.watch("start", function(value)
         if data and data.ok then
             noctalia.state.set("library", data.files or {})
             send({ action = "snapshot" }, function(state)
-                if state and state.ok then noctalia.state.set("connected", true); noctalia.state.set("snapshot", state) end
+                if state and state.ok then noctalia.state.set("connected", true); noctalia.state.set("snapshot", state); appearance() end
             end)
             local directory = noctalia.getConfig("directory")
             if directory and directory ~= "" then

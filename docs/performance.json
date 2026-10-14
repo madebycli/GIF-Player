@@ -42,6 +42,7 @@
     "workload": "3 separate synthetic 512x512 GIFs, 24 frames, 50ms delays, scale 0.7, visible, no effects",
     "method": "warm processes measured sequentially; /proc process CPU and RSS; one-core CPU percentage",
     "date": "2026-10-14",
-    "limitations": "No GPU, hardware power meter, Mango runtime or universal workload claim"
+    "limitations": "No GPU, hardware power meter, Mango runtime or universal workload claim",
+    "version": "1.0.0 (historical baseline; resampling renderer changed in 1.1.0)"
   }
 }

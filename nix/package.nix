@@ -1,7 +1,7 @@
 { lib, rustPlatform, pkg-config, libxkbcommon, dejavu_fonts }:
 rustPlatform.buildRustPackage {
   pname = "noctalia-gif-player";
-  version = "1.0.0";
+  version = "1.1.0";
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;
   nativeBuildInputs = [ pkg-config ];
@@ -13,6 +13,7 @@ rustPlatform.buildRustPackage {
     ln -s gif-player "$out/bin/gif-picker"
     ln -s gif-player "$out/bin/gif-control"
     install -Dm644 data/gif-player-picker.desktop "$out/share/applications/gif-player-picker.desktop"
+    install -Dm644 data/noctalia-gif-player.desktop "$out/share/applications/noctalia-gif-player.desktop"
     install -Dm644 data/gif-player-control.desktop "$out/share/applications/gif-player-control.desktop"
     install -Dm644 completions/gif-player.fish "$out/share/fish/vendor_completions.d/gif-player.fish"
     mkdir -p "$out/share/noctalia-gif-player/plugins"

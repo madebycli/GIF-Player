@@ -35,8 +35,8 @@ pub fn generate(paths: &Paths, path: &Path) -> Result<Value> {
         }
     }
     private_dir(&cache)?;
-    let animation = decode::load(path, 8 * 1024 * 1024)?;
-    let scale = (160.0 / animation.width.max(animation.height) as f64).min(1.0);
+    let animation = decode::preview(path)?;
+    let scale = (384.0 / animation.width.max(animation.height) as f64).min(1.0);
     let w = (animation.width as f64 * scale).round().max(1.0) as u32;
     let h = (animation.height as f64 * scale).round().max(1.0) as u32;
     let mut frames = Vec::new();
@@ -45,9 +45,8 @@ pub fn generate(paths: &Paths, path: &Path) -> Result<Value> {
     // Playback itself retains all frames. Bound PNG/manifest size per preview.
     let stride = animation.frames.len().div_ceil(128);
     for (index, group) in animation.frames.chunks(stride).enumerate() {
-        let frame = &group[0];
         pixmap.data_mut().copy_from_slice(&decode::resize(
-            &frame.pixels,
+            &animation.pixels(index * stride)?,
             animation.width,
             animation.height,
             w,

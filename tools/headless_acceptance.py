@@ -143,16 +143,51 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
             pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "800", "70"]))
             return 0 < pixel[0] < 40
         wait_for(ui_ready, "standalone surface first presentation")
-        input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 220) + " 140")
+        input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 480) + " 140")
         input_command("click")
         (artifacts / "standalone-state.json").write_text(json.dumps(request({"action":"snapshot"}),indent=2))
-        wait_for(lambda: request({"action": "status", "id": "test"})["paused"], "standalone UI Pause all")
+        wait_for(lambda: request({"action": "status", "id": "test"})["paused"], "standalone UI pause")
         request({"action": "ui-close"})
+        assert request({"action":"app"})["ok"]
+        def app_is_tiled():
+            tree = json.loads(subprocess.check_output(["swaymsg", "-t", "get_tree", "-r"], env=env))
+            def walk(node, floating=False):
+                if node.get("app_id") == "io.github.madebycli.NoctaliaGifPlayer": return not floating
+                return any(walk(child, floating) for child in node.get("nodes",[])) or any(walk(child,True) for child in node.get("floating_nodes",[]))
+            return walk(tree)
+        wait_for(app_is_tiled, "normal tiled xdg application window")
+        request({"action": "ui-close"})
+        native = root / "native.gif"
+        subprocess.run([str(examples / "generate_fixture"), str(native), "1024", "24"], check=True)
+        assert request({"action":"spawn","gif":str(native),"id":"quality","state":{"x":400,"y":100,"scale":1,"output":"HEADLESS-1","paused":True,"locked":False}})["ok"]
+        wait_for(lambda: not request({"action":"status","id":"quality"})["loading"], "native resolution decode")
+        status = request({"action":"status","id":"quality"})
+        assert status["source_size"] == [1024,1024], status
+        assert status["frame_storage"] == "lossless-disk", status
+        input_command("move 420 120")
+        input_command("down")
+        presentation_ms = []
+        for dx in [20,25,30,35,40,50]:
+            start = time.monotonic()
+            driver.stdin.write("move " + str(420 + dx) + " 120\n")
+            driver.stdin.flush()
+            assert driver.stdout.readline().strip().startswith("done ")
+            picture = artifacts / "native-drag.png"
+            subprocess.run(["grim", "-o", "HEADLESS-1", str(picture)], env=env, check=True)
+            pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), str(400 + dx + 509), "120"]))
+            assert pixel == [22,24,40,255], pixel
+            trailing = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "405", "140"]))
+            assert trailing == [36,96,160,255], ("stale previous buffer left a trail", trailing)
+            position = request({"action":"status","id":"quality"})["base_position"]
+            assert position == [400 + dx,100], position
+            presentation_ms.append((time.monotonic() - start) * 1000)
+        input_command("up")
+        (artifacts / "native-drag.json").write_text(json.dumps({"native_size":status["source_size"],"storage":status["frame_storage"],"presentation_ms":presentation_ms,"max_ms":max(presentation_ms)},indent=2))
         subprocess.run(["swaymsg", "output HEADLESS-2 disable"], env=env, check=True, stdout=subprocess.DEVNULL)
         wait_for(lambda: len(request({"action": "snapshot"})["outputs"]) == 1, "output removal")
         request({"action": "quit-daemon"})
-        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "output removal"]}, indent=2))
-        print("11 real Wayland acceptance checks passed")
+        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "native resolution under cache pressure", "unsnapped visual drag", "output removal"]}, indent=2))
+        print("14 real Wayland acceptance checks passed")
     finally:
         for child in reversed(children):
             if child.poll() is None:

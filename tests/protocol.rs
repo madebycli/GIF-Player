@@ -283,3 +283,21 @@ fn runtime_symlinks_are_rejected() {
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("Unsafe directory"));
 }
+
+#[test]
+fn native_theme_updates_validate_and_persist() {
+    let session = Session::new();
+    let result = session.request(json!({"action":"appearance","palette":{"primary":"#cbb9ff","surface":"#121217"},"font_family":"monospace"}));
+    assert_eq!(result["ok"], true);
+    let result = session.request(json!({"action":"appearance","palette":{"primary":"#bad"}}));
+    assert_eq!(result["ok"], false);
+    let snapshot = session.request(json!({"action":"snapshot"}));
+    assert_eq!(
+        snapshot["settings"]["appearance"]["palette"]["primary"],
+        "#cbb9ff"
+    );
+    assert_eq!(
+        snapshot["settings"]["appearance"]["font_family"],
+        "monospace"
+    );
+}

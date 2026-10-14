@@ -14,10 +14,17 @@
     "independent floating picker opened",
     "picker Add button started a second widget in the real daemon",
     "Rust-generated PNG hover preview manifest exists",
-    "all plugin Luau modules compile"
+    "all plugin Luau modules compile",
+    "zero-GIF widget on vertical 35 px flying bar",
+    "installer selects enabled flying bar and ignores disabled default / bar-order metadata",
+    "image click starts GIF; second click stops it",
+    "continuous virtualized collection scroll reaches last of 32 GIFs",
+    "compact settings restore switch",
+    "live Catppuccin-to-Dracula palette and configured monospace font synchronization with the normal Rust window"
   ],
   "limits": [
     "Mango runtime unavailable without /dev/dri",
     "Noctalia host tested on Sway; hardware font/display appearance can differ"
-  ]
+  ],
+  "version": "1.1.0"
 }
