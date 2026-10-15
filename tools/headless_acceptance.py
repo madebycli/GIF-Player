@@ -142,8 +142,8 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
         def ui_ready():
             picture = artifacts / "standalone.png"
             subprocess.run(["grim", "-o", ui_output, str(picture)], env=env, check=True)
-            pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "800", "70"]))
-            return 0 < pixel[0] < 40
+            pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "350", "600"]))
+            return pixel == [18,18,23,255]
         wait_for(ui_ready, "standalone surface first presentation")
         input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 480) + " 185")
         input_command("click")
