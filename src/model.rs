@@ -487,7 +487,7 @@ impl Engine {
         Ok(())
     }
     pub fn snapshot(&self) -> Value {
-        json!({"ok":true,"protocol":2,"product":"Noctalia GIF Player","engine":"rust","revision":self.revision,"widgets":self.widgets.values().map(|w|w.status(self.assets.get(&w.path))).collect::<Vec<_>>(),"outputs":self.outputs,"profiles":self.store.profiles,"settings":self.store.settings,"cache_bytes":self.assets.values().map(|a|a.reserved).sum::<usize>()+self.thumbnails.values().map(|a|a.bytes).sum::<usize>(),"frontend_request":self.frontend_request,"error":self.error,"logging":crate::diagnostics::status(&self.paths)})
+        json!({"ok":true,"protocol":2,"product":"Noctalia GIF Player","engine":"rust","collection_dir":self.paths.gif_dir,"revision":self.revision,"widgets":self.widgets.values().map(|w|w.status(self.assets.get(&w.path))).collect::<Vec<_>>(),"outputs":self.outputs,"profiles":self.store.profiles,"settings":self.store.settings,"cache_bytes":self.assets.values().map(|a|a.reserved).sum::<usize>()+self.thumbnails.values().map(|a|a.bytes).sum::<usize>(),"frontend_request":self.frontend_request,"error":self.error,"logging":crate::diagnostics::status(&self.paths)})
     }
     pub fn restore(&mut self) -> Result<()> {
         crate::diag!(

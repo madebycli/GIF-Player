@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 — Clearer, more intuitive controls
+
+- Put playback, edit/done, visibility and stop first; move position, motion and advanced tools into expandable sections.
+- Keep the picker minimal and continuous, add image-action hints, clear search and useful empty states.
+- Add explicit directory/layout Save, inline Rename and Delete confirmation, named logging-level choices and report-folder opening.
+- Rework the normal Rust app with responsive image columns, compact restore switches, usable narrow layouts and shared English/German labels.
+- Fix keyboard focus for normal xdg windows; support Tab/Shift+Tab, Enter/Space, Ctrl+A, Ctrl+F, Ctrl+W and keyboard slider changes.
+- Synchronize collection-directory changes across frontends. Preserve playback, legacy commands, configuration and theme tracking.
+
 ## 1.2.0 — Detailed diagnostics and folder export
 
 - Add timestamped JSONL lifecycle, IPC, decode, playback, cache, surface, buffer, input and persistence events, including frame/render/decompression timing in trace mode.

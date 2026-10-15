@@ -5,6 +5,7 @@ local busy = false
 local started = false
 local frontendNonce = nil
 local lastAppearance = nil
+local libraryDirectory = nil
 local pump
 local function send(command, callback)
     local encoded = noctalia.json.encode(command)
@@ -71,6 +72,7 @@ local function start()
             if data.ok then
                 if not data.settings or not data.settings.appearance then lastAppearance = nil end
                 noctalia.state.set("snapshot", data)
+                if data.collection_dir and data.collection_dir ~= libraryDirectory then libraryDirectory = data.collection_dir; refreshLibrary() end
                 noctalia.state.set("error", data.error or "")
                 if data.frontend_request and data.frontend_request.nonce ~= frontendNonce then
                     frontendNonce = data.frontend_request.nonce

@@ -5,12 +5,23 @@ use crate::{
 use anyhow::{Context, Result};
 use fontdue::{Font, FontSettings};
 use serde_json::{Value, json};
-use std::{collections::HashMap, path::PathBuf, process::Command};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    process::Command,
+};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Transform};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum Action {
     Command(Value),
+    Section(String),
+    Choose(String, Value),
+    SaveDirectory,
+    SaveProfile,
+    SaveRename,
+    OpenFolder(PathBuf),
+    ClearSearch,
     ToggleGif(PathBuf),
     Tab(usize),
     Close,
@@ -35,6 +46,13 @@ pub struct Ui {
     pub open: bool,
     pub windowed: bool,
     mode: String,
+    sections: HashSet<String>,
+    translations: Value,
+    columns: usize,
+    content_height: i32,
+    keyboard_hit: Option<usize>,
+    select_all: bool,
+    seen_export: Option<String>,
     theme: Theme,
     appearance: Value,
     viewport_height: i32,
@@ -46,7 +64,9 @@ pub struct Ui {
     pub focus: Option<String>,
     pub hits: Vec<Hit>,
     pub files: Vec<PathBuf>,
+    library_dir: PathBuf,
     pub hovered: Option<usize>,
+    hover_action: Option<Action>,
     pub active_slider: Option<usize>,
     scroll: i32,
     scroll_max: i32,
@@ -63,6 +83,26 @@ impl Ui {
             open: false,
             windowed: false,
             mode: "picker".into(),
+            sections: HashSet::new(),
+            translations: serde_json::from_str(
+                if ["LC_ALL", "LC_MESSAGES", "LANG"]
+                    .iter()
+                    .filter_map(|key| std::env::var(key).ok())
+                    .find(|value| !value.is_empty())
+                    .unwrap_or_default()
+                    .starts_with("de")
+                {
+                    include_str!("../plugins/gif-player/translations/de.json")
+                } else {
+                    include_str!("../plugins/gif-player/translations/en.json")
+                },
+            )
+            .unwrap(),
+            columns: 3,
+            content_height: 0,
+            keyboard_hit: None,
+            select_all: false,
+            seen_export: None,
             theme: Theme::default(),
             appearance: Value::Null,
             viewport_height: 500,
@@ -74,7 +114,9 @@ impl Ui {
             focus: None,
             hits: Vec::new(),
             files: Vec::new(),
+            library_dir: PathBuf::new(),
             hovered: None,
+            hover_action: None,
             active_slider: None,
             scroll: 0,
             scroll_max: 0,
@@ -85,6 +127,9 @@ impl Ui {
             glyphs: HashMap::new(),
             revision: u64::MAX,
         }
+    }
+    fn tr(&self, key: &str) -> String {
+        self.translations[key].as_str().unwrap_or(key).to_owned()
     }
     pub fn show(&mut self, mode: &str, engine: &mut Engine) -> Result<()> {
         crate::diag!(Info, "ui", "opened", json!({"mode":mode}));
@@ -100,7 +145,12 @@ impl Ui {
         self.load_font(engine)?;
 
         self.dirty = true;
-        self.focus = Some("search".into());
+        self.focus = if self.tab == 0 {
+            Some("search".into())
+        } else {
+            None
+        };
+        self.keyboard_hit = None;
         self.refresh(engine)?;
         self.open = true;
         Ok(())
@@ -172,11 +222,26 @@ impl Ui {
     }
     pub fn refresh(&mut self, engine: &mut Engine) -> Result<()> {
         self.files = engine.paths.collection()?;
+        self.library_dir = engine.paths.gif_dir.clone();
         self.page = 0;
+        self.scroll = 0;
         self.dirty = true;
         Ok(())
     }
     pub fn sync(&mut self, engine: &Engine) {
+        if self.open && self.library_dir != engine.paths.gif_dir {
+            self.library_dir = engine.paths.gif_dir.clone();
+            self.fields.remove("directory");
+            match engine.paths.collection() {
+                Ok(files) => {
+                    self.files = files;
+                    self.library_dir = engine.paths.gif_dir.clone();
+                    self.scroll = 0;
+                    self.dirty = true;
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+        }
         self.sync_appearance(engine);
         if self.open {
             if let Err(error) = self.load_font(engine) {
@@ -186,12 +251,17 @@ impl Ui {
         if self.revision != engine.revision {
             if let Some(report) = crate::diagnostics::status(&engine.paths)
                 .get("last_export")
-                .filter(|v| v.is_object() && v["pending"] != true)
+                .filter(|r| r["pending"] != true)
             {
-                if let Some(error) = report.get("error").and_then(Value::as_str) {
-                    self.error = Some(error.into());
-                } else if let Some(directory) = report.get("directory").and_then(Value::as_str) {
-                    self.notice = Some(format!("Logs exported: {directory}"));
+                if let Some(directory) = report["directory"].as_str() {
+                    if self.seen_export.as_deref() != Some(directory) {
+                        self.seen_export = Some(directory.into());
+                        if let Some(error) = report["error"].as_str() {
+                            self.error = Some(error.into());
+                        } else {
+                            self.notice = Some(self.tr("report_done"));
+                        }
+                    }
                 }
             }
             self.revision = engine.revision;
@@ -235,7 +305,12 @@ impl Ui {
         }
         let files = self.filtered();
         let first = (self.scroll / 150).max(0) as usize;
-        engine.previews = files.into_iter().skip(first * 3).take(18).collect();
+        let count = ((self.viewport_height.max(1) / 150 + 2) as usize * self.columns).min(28);
+        engine.previews = files
+            .into_iter()
+            .skip(first * self.columns)
+            .take(count)
+            .collect();
         for path in engine.previews.clone() {
             if let Err(e) = engine.request_thumbnail(path) {
                 if e.to_string().contains("Thumbnail queue is busy") {
@@ -276,14 +351,55 @@ impl Ui {
             Action::Command(cmd) => {
                 let result = engine.dispatch(&cmd);
                 if let Some(directory) = result.get("directory").and_then(Value::as_str) {
-                    self.notice = Some(format!("Exporting logs: {directory}"));
+                    let _ = directory;
+                    self.notice = Some(self.tr("report_exporting"));
                 }
                 self.error = result
                     .get("error")
                     .and_then(Value::as_str)
                     .map(str::to_string);
             }
+            Action::Section(key) => {
+                if !self.sections.remove(&key) {
+                    self.sections.insert(key);
+                }
+                self.keyboard_hit = None;
+            }
+            Action::Choose(section, command) => {
+                self.sections.remove(&section);
+                self.activate(Action::Command(command), engine);
+            }
+            Action::SaveDirectory => {
+                self.focus = Some("directory".into());
+                self.submit(engine);
+            }
+            Action::SaveProfile => {
+                self.focus = Some("profile".into());
+                self.submit(engine);
+            }
+            Action::SaveRename => {
+                self.focus = Some("rename".into());
+                self.submit(engine);
+            }
+            Action::OpenFolder(path) => {
+                if let Err(error) = Command::new("xdg-open")
+                    .arg(path)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    self.error = Some(error.to_string());
+                }
+            }
+            Action::ClearSearch => {
+                self.fields.insert("search".into(), String::new());
+                self.scroll = 0;
+                self.focus = Some("search".into());
+            }
             Action::Tab(tab) => {
+                self.notice = None;
+                self.keyboard_hit = None;
                 self.tab = tab;
                 self.page = 0;
                 self.focus = None;
@@ -297,19 +413,41 @@ impl Ui {
             }
             Action::Select(id) => {
                 self.selected = Some(id);
+                self.sections.remove("selector");
                 self.fields
                     .retain(|k, _| ["search", "profile", "directory"].contains(&k.as_str()));
             }
             Action::Rename(name) => {
-                let new_name = self.fields.get("rename").cloned().unwrap_or_default();
-                let result = engine
-                    .dispatch(&json!({"action":"profile-rename","name":name,"new_name":new_name}));
-                self.error = result
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                self.sections.insert(format!("rename:{name}"));
+                self.fields.insert("rename".into(), name);
+                self.focus = Some("rename".into());
+                self.select_all = true;
             }
             Action::Field(key) => {
+                if self.focus.as_ref() != Some(&key) {
+                    if key == "directory" {
+                        self.fields
+                            .insert(key.clone(), engine.paths.gif_dir.to_string_lossy().into());
+                    }
+                    if let Some(widget) =
+                        self.selected.as_ref().and_then(|id| engine.widgets.get(id))
+                    {
+                        if key == "x" || key == "y" {
+                            self.fields.insert(
+                                key.clone(),
+                                format!(
+                                    "{:.0}",
+                                    if key == "x" {
+                                        widget.settings.x
+                                    } else {
+                                        widget.settings.y
+                                    }
+                                ),
+                            );
+                        }
+                    }
+                    self.select_all = true;
+                }
                 self.focus = Some(key);
             }
             Action::Refresh => {
@@ -322,6 +460,7 @@ impl Ui {
         self.dirty = true;
     }
     pub fn click(&mut self, x: f64, y: f64, engine: &mut Engine) {
+        self.keyboard_hit = None;
         if let Some(index) = self.hits.iter().rposition(|h| h.rect.contains(x, y)) {
             if matches!(self.hits[index].action, Action::Slider { .. }) {
                 self.active_slider = Some(index);
@@ -366,6 +505,9 @@ impl Ui {
         let hovered = self.hits.iter().rposition(|h| h.rect.contains(x, y));
         if hovered != self.hovered {
             self.hovered = hovered;
+            self.hover_action = hovered
+                .and_then(|i| self.hits.get(i))
+                .map(|h| h.action.clone());
             self.dirty = true;
         }
     }
@@ -396,9 +538,14 @@ impl Ui {
     }
     pub fn text_input(&mut self, text: &str, engine: &mut Engine) {
         if let Some(key) = self.focus.clone() {
+            if self.select_all {
+                self.fields.insert(key.clone(), String::new());
+                self.select_all = false;
+            }
             self.fields.entry(key.clone()).or_default().push_str(text);
             if key == "search" {
                 self.page = 0;
+                self.scroll = 0;
             }
             self.dirty = true;
             let _ = engine;
@@ -406,30 +553,153 @@ impl Ui {
     }
     pub fn backspace(&mut self) {
         if let Some(key) = &self.focus {
-            self.fields.entry(key.clone()).or_default().pop();
+            if self.select_all {
+                self.fields.insert(key.clone(), String::new());
+                self.select_all = false;
+            } else {
+                self.fields.entry(key.clone()).or_default().pop();
+            }
+            if key == "search" {
+                self.scroll = 0;
+            }
             self.dirty = true;
         }
     }
     pub fn scroll(&mut self, delta: f64) {
         self.scroll = (self.scroll + (delta * 3.0) as i32).clamp(0, self.scroll_max);
         self.active_slider = None;
+        self.keyboard_hit = None;
+        self.hovered = None;
+        self.hover_action = None;
         self.dirty = true;
     }
     pub fn submit(&mut self, engine: &mut Engine) {
         let key = self.focus.clone().unwrap_or_default();
         let value = self.fields.get(&key).cloned().unwrap_or_default();
+        if key == "search" {
+            if let Some(path) = self.filtered().first() {
+                self.activate(Action::ToggleGif(path.clone()), engine);
+            }
+            return;
+        }
+        if self.focus.is_none() {
+            if let Some(hit) = self
+                .keyboard_hit
+                .and_then(|i| self.hits.get(i))
+                .map(|h| h.action.clone())
+            {
+                self.activate(hit, engine);
+            }
+            return;
+        }
         let cmd=match key.as_str(){
-            "profile"=>Some(json!({"action":"profile-save","name":value})),"directory"=>Some(json!({"action":"library-directory","path":value})),
-            "search"=>self.filtered().get(self.page*8).map(|p|json!({"action":"spawn","gif":p})),
-            "x"|"y"=>self.selected.as_ref().and_then(|id|engine.widgets.get(id)).and_then(|w|value.parse::<f64>().ok().map(|n|json!({"action":"move","id":w.id,"x":if key=="x"{n}else{w.settings.x},"y":if key=="y"{n}else{w.settings.y}}))),
+            "profile" if !value.trim().is_empty()=>Some(json!({"action":"profile-save","name":value.trim()})),
+            "directory" if !value.trim().is_empty()=>Some(json!({"action":"library-directory","path":value})),
+            "rename"=>self.sections.iter().find_map(|key|key.strip_prefix("rename:")).map(|name|json!({"action":"profile-rename","name":name,"new_name":value})),
+            "x"|"y"=>self.selected.as_ref().and_then(|id|engine.widgets.get(id)).and_then(|w|value.parse::<f64>().ok().filter(|v|v.is_finite()).map(|n|json!({"action":"move","id":w.id,"x":if key=="x"{n}else{w.settings.x},"y":if key=="y"{n}else{w.settings.y}}))),
             _=>None,
         };
         if let Some(cmd) = cmd {
             self.activate(Action::Command(cmd), engine);
-            if key == "directory" {
-                let _ = self.refresh(engine);
+            if self.error.is_none() {
+                if key == "directory" {
+                    let _ = self.refresh(engine);
+                    self.notice = Some(self.tr("reloaded"));
+                }
+                if key == "profile" {
+                    self.fields.insert("profile".into(), String::new());
+                    self.notice = Some(self.tr("layout_saved"));
+                }
+                if key == "rename" {
+                    self.sections.retain(|key| !key.starts_with("rename:"));
+                    self.focus = None;
+                }
             }
+        } else {
+            self.error = Some(self.tr(if key == "directory" {
+                "directory_hint"
+            } else if key == "profile" {
+                "profile_name"
+            } else {
+                "invalid_value"
+            }));
+            self.dirty = true;
         }
+    }
+    pub fn focus_next(&mut self, reverse: bool, engine: &mut Engine) {
+        if self.hits.is_empty() {
+            return;
+        }
+        let current = self
+            .focus
+            .as_ref()
+            .and_then(|key| {
+                self.hits
+                    .iter()
+                    .position(|h| matches!(&h.action,Action::Field(k) if k==key))
+            })
+            .or(self.keyboard_hit);
+        let index = match current {
+            Some(i) if reverse => (i + self.hits.len() - 1) % self.hits.len(),
+            Some(i) => (i + 1) % self.hits.len(),
+            None if reverse => self.hits.len() - 1,
+            None => 0,
+        };
+        self.focus = None;
+        self.keyboard_hit = Some(index);
+        if let Action::Field(key) = &self.hits[index].action {
+            self.activate(Action::Field(key.clone()), engine);
+        }
+        self.dirty = true;
+    }
+    pub fn select_text(&mut self) {
+        if self.focus.is_some() {
+            self.select_all = true;
+            self.dirty = true;
+        }
+    }
+    pub fn adjust_focused_slider(&mut self, direction: f64, engine: &mut Engine) {
+        let Some(Action::Slider {
+            id,
+            action,
+            key,
+            min,
+            max,
+        }) = self
+            .keyboard_hit
+            .and_then(|i| self.hits.get(i))
+            .map(|h| h.action.clone())
+        else {
+            return;
+        };
+        let Some(widget) = engine.widgets.get(&id) else {
+            return;
+        };
+        let current = if key == "seconds" {
+            widget.settings.jump_rate
+        } else {
+            serde_json::to_value(&widget.settings)
+                .ok()
+                .and_then(|v| v[&key].as_f64())
+                .unwrap_or(min)
+        };
+        let step = match key.as_str() {
+            "opacity" | "scale" => 0.05,
+            "speed" => 0.1,
+            _ => 0.5,
+        };
+        let mut command = json!({"action":action,"id":id});
+        command[&key] = json!((current + direction * step).clamp(min, max));
+        self.activate(Action::Command(command), engine);
+    }
+    pub fn escape(&mut self) {
+        self.focus = None;
+        if !self.windowed {
+            self.open = false;
+        }
+        self.keyboard_hit = None;
+        self.select_all = false;
+        self.dirty = true;
     }
     fn rect(&mut self, pix: &mut Pixmap, rect: &Rect, color: Color, radius: f32) {
         let mut path = PathBuilder::new();
@@ -555,7 +825,7 @@ impl Ui {
         active: bool,
     ) {
         let rect = Rect { x, y, w, h: 38 };
-        let hovered = self.hovered == Some(self.hits.len());
+        let hovered = self.hover_action.as_ref() == Some(&action);
         self.rect(
             pix,
             &rect,
@@ -582,14 +852,32 @@ impl Ui {
             w - 24,
         );
         if !active {
-            self.outline(pix, &rect, self.theme.outline, 6.0);
+            self.outline(
+                pix,
+                &rect,
+                if self.keyboard_hit == Some(self.hits.len()) {
+                    self.theme.primary
+                } else {
+                    self.theme.outline
+                },
+                6.0,
+            );
         }
         self.hits.push(Hit { rect, action });
     }
     fn input(&mut self, pix: &mut Pixmap, key: &str, hint: &str, x: i32, y: i32, w: i32) {
         let rect = Rect { x, y, w, h: 38 };
         self.rect(pix, &rect, self.theme.variant, 6.0);
-        self.outline(pix, &rect, self.theme.outline, 6.0);
+        self.outline(
+            pix,
+            &rect,
+            if self.focus.as_deref() == Some(key) {
+                self.theme.primary
+            } else {
+                self.theme.outline
+            },
+            6.0,
+        );
         let text = self
             .fields
             .get(key)
@@ -607,15 +895,37 @@ impl Ui {
             w - 24,
         );
         if self.focus.as_deref() == Some(key) {
+            if self.select_all {
+                self.outline(
+                    pix,
+                    &Rect {
+                        x: x + 6,
+                        y: y + 5,
+                        w: w - 12,
+                        h: 28,
+                    },
+                    self.theme.primary,
+                    3.0,
+                );
+            }
+            let advance = self
+                .font
+                .as_ref()
+                .map(|font| {
+                    text.chars()
+                        .map(|c| font.metrics(c, 14.0).advance_width)
+                        .sum::<f32>()
+                })
+                .unwrap_or(0.0) as i32;
             self.rect(
                 pix,
                 &Rect {
-                    x: x + 8,
-                    y: y + 34,
-                    w: w - 16,
-                    h: 2,
+                    x: (x + 12 + advance).min(x + w - 12),
+                    y: y + 9,
+                    w: 1,
+                    h: 20,
                 },
-                self.theme.primary,
+                self.theme.foreground,
                 0.0,
             );
         }
@@ -624,116 +934,337 @@ impl Ui {
             action: Action::Field(key.into()),
         });
     }
-    pub fn draw(&mut self, engine: &Engine, width: u32, height: u32, scale: f64) -> Pixmap {
-        self.paint_scale = scale as f32;
-        let physical_width = (width as f64 * scale).ceil() as u32;
-        let physical_height = (height as f64 * scale).ceil() as u32;
-        let mut pix = Pixmap::new(physical_width, physical_height).unwrap();
-        self.hits.clear();
-        let w = width as i32;
-        let h = height as i32;
+    fn fold(&mut self, pix: &mut Pixmap, key: &str, title: &str, x: i32, y: i32, w: i32) -> bool {
+        let open = self.sections.contains(key);
+        let rect = Rect { x, y, w, h: 42 };
+        self.rect(pix, &rect, self.theme.variant, 9.0);
+        self.outline(pix, &rect, self.theme.outline, 9.0);
+        self.text(
+            pix,
+            title,
+            x + 14,
+            y + 12,
+            14,
+            if open {
+                self.theme.primary
+            } else {
+                self.theme.foreground
+            },
+            w - 56,
+        );
+        self.text(
+            pix,
+            if open { "⌄" } else { "›" },
+            x + w - 30,
+            y + 10,
+            17,
+            self.theme.muted,
+            24,
+        );
+        self.hits.push(Hit {
+            rect,
+            action: Action::Section(key.into()),
+        });
+        open
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn slider_control(
+        &mut self,
+        pix: &mut Pixmap,
+        id: &str,
+        key: &str,
+        action: &str,
+        label: &str,
+        display: &str,
+        value: f64,
+        min: f64,
+        max: f64,
+        x: i32,
+        y: i32,
+        w: i32,
+    ) {
+        self.text(pix, label, x, y, 13, self.theme.foreground, w - 96);
+        self.text(pix, display, x + w - 86, y, 13, self.theme.primary, 86);
+        let rect = Rect {
+            x: x + 8,
+            y: y + 22,
+            w: w - 16,
+            h: 28,
+        };
+        let fraction = ((value - min) / (max - min)).clamp(0.0, 1.0);
+        let at = (fraction * rect.w as f64).round() as i32;
         self.rect(
-            &mut pix,
-            &Rect { x: 0, y: 0, w, h },
-            self.theme.surface,
+            pix,
+            &Rect {
+                x: rect.x,
+                y: rect.y + 10,
+                w: rect.w,
+                h: 6,
+            },
+            self.theme.outline,
+            3.0,
+        );
+        self.rect(
+            pix,
+            &Rect {
+                x: rect.x,
+                y: rect.y + 10,
+                w: at.max(1),
+                h: 6,
+            },
+            self.theme.primary,
+            3.0,
+        );
+        self.rect(
+            pix,
+            &Rect {
+                x: rect.x + at - 8,
+                y: rect.y + 5,
+                w: 16,
+                h: 16,
+            },
+            self.theme.primary,
+            8.0,
+        );
+        self.hits.push(Hit {
+            rect,
+            action: Action::Slider {
+                id: id.into(),
+                action: action.into(),
+                key: key.into(),
+                min,
+                max,
+            },
+        });
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn toggle(
+        &mut self,
+        pix: &mut Pixmap,
+        label: &str,
+        hint: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        checked: bool,
+        action: Action,
+    ) {
+        self.text(pix, label, x, y + 2, 14, self.theme.foreground, w - 64);
+        if !hint.is_empty() {
+            self.text(pix, hint, x, y + 25, 12, self.theme.muted, w - 64);
+        }
+        let rect = Rect {
+            x: x + w - 44,
+            y: y + 3,
+            w: 44,
+            h: 24,
+        };
+        self.rect(
+            pix,
+            &rect,
+            if checked {
+                self.theme.primary
+            } else {
+                self.theme.outline
+            },
             12.0,
         );
-        let title = ["GIFs", "Playback", "Layouts", "Settings"][self.tab];
-        self.text(&mut pix, title, 20, 18, 18, self.theme.primary, w - 100);
-        self.button(&mut pix, "×", w - 50, 10, 34, Action::Close, false);
-        let offset_x = if self.windowed {
-            if w < 800 { 112 } else { 172 }
+        self.rect(
+            pix,
+            &Rect {
+                x: rect.x + if checked { 23 } else { 3 },
+                y: rect.y + 3,
+                w: 18,
+                h: 18,
+            },
+            if checked {
+                self.theme.on_primary
+            } else {
+                self.theme.foreground
+            },
+            9.0,
+        );
+        self.hits.push(Hit {
+            rect: Rect { x, y, w, h: 48 },
+            action,
+        });
+    }
+    pub fn draw(&mut self, engine: &Engine, width: u32, height: u32, scale: f64) -> Pixmap {
+        self.paint_scale = scale as f32;
+        let w = width as i32;
+        let h = height as i32;
+        let mut pix = Pixmap::new(
+            (width as f64 * scale).ceil() as u32,
+            (height as f64 * scale).ceil() as u32,
+        )
+        .unwrap();
+        pix.fill(self.theme.surface);
+        self.hits.clear();
+        let side = if self.windowed {
+            if w < 800 { 164 } else { 184 }
         } else {
             0
         };
+        let top = 94;
+        let bottom = 32;
+        let viewport = (h - top - bottom).max(1);
+        self.viewport_height = viewport;
+        let title = self.tr(["collection", "starter", "profiles", "settings_tab"][self.tab]);
+        self.text(
+            &mut pix,
+            &title,
+            side + 24,
+            20,
+            22,
+            self.theme.foreground,
+            w - side - 180,
+        );
+        let subtitle = self.tr(match self.tab {
+            0 => "picker_hint",
+            1 => "playback_hint",
+            2 => "layouts_hint",
+            _ => "settings_subtitle",
+        });
+        self.text(
+            &mut pix,
+            &subtitle,
+            side + 24,
+            54,
+            12,
+            self.theme.muted,
+            w - side - 48,
+        );
         if self.windowed {
-            for (i, label) in ["GIFs", "Playback", "Layouts", "Settings"]
+            self.text(
+                &mut pix,
+                "GIF Player",
+                18,
+                22,
+                17,
+                self.theme.primary,
+                side - 30,
+            );
+            for (index, key) in ["collection", "starter", "profiles", "settings_tab"]
                 .iter()
                 .enumerate()
             {
                 self.button(
                     &mut pix,
-                    label,
+                    &self.tr(key),
                     12,
-                    64 + i as i32 * 48,
-                    offset_x - 24,
-                    Action::Tab(i),
-                    self.tab == i,
+                    94 + index as i32 * 48,
+                    side - 24,
+                    Action::Tab(index),
+                    self.tab == index,
                 );
             }
+            self.text(
+                &mut pix,
+                &no_count(
+                    &self.tr(if engine.widgets.len() == 1 {
+                        "active.one"
+                    } else {
+                        "active.other"
+                    }),
+                    engine.widgets.len(),
+                ),
+                18,
+                h - 60,
+                11,
+                self.theme.muted,
+                side - 30,
+            );
         } else {
+            let other = if self.tab == 0 { "control" } else { "picker" };
             self.button(
                 &mut pix,
-                "⚙",
-                w - 92,
-                10,
-                34,
+                &self.tr(if self.tab == 0 {
+                    "starter"
+                } else {
+                    "collection"
+                }),
+                w - 372,
+                16,
+                132,
+                Action::Command(json!({"action":other})),
+                false,
+            );
+            self.button(
+                &mut pix,
+                &self.tr("settings_tab"),
+                w - 232,
+                16,
+                148,
                 Action::Command(json!({"action":"settings-ui"})),
                 false,
             );
-            self.button(
-                &mut pix,
-                "◫",
-                w - 134,
-                10,
-                34,
-                Action::Command(json!({"action":"app"})),
-                false,
-            );
+            self.button(&mut pix, "×", w - 70, 16, 46, Action::Close, false);
         }
-        let body_width = width.saturating_sub(offset_x as u32);
-        let body_height = (h + 94).max(760);
-        self.viewport_height = h - 96;
-        self.scroll_max = if self.tab == 0 {
-            (self.filtered().len().div_ceil(3) as i32 * 150 + 100 - self.viewport_height).max(0)
+        let body_w = (w - side - 48).max(1);
+        self.columns = if body_w >= 1000 {
+            5
+        } else if body_w >= 760 {
+            4
+        } else if body_w >= 540 {
+            3
         } else {
-            (body_height - h).max(0)
+            2
         };
-        self.scroll = self.scroll.clamp(0, self.scroll_max);
+        let virtualized = self.tab == 0 || self.tab == 2;
+        let allocation = if virtualized {
+            viewport
+        } else {
+            viewport.max(900 + self.sections.len().min(8) as i32 * 320)
+        };
         let mut body = Pixmap::new(
-            (body_width as f64 * scale).ceil() as u32,
-            (body_height as f64 * scale).ceil() as u32,
+            (body_w as f64 * scale).ceil() as u32,
+            (allocation as f64 * scale).ceil() as u32,
         )
         .unwrap();
         body.fill(self.theme.surface);
         let header_hits = self.hits.len();
-        match self.tab {
-            0 => self.library(&mut body, engine, body_width as i32, body_height),
-            1 => self.active(&mut body, engine, body_width as i32, body_height),
-            2 => self.profiles(&mut body, engine, body_width as i32, body_height),
-            _ => self.settings(&mut body, engine, body_width as i32, body_height),
-        }
-        let top = (64.0 * scale).ceil() as u32;
-        let bottom = ((h - 32).max(64) as f64 * scale).ceil() as u32;
-        let source_offset =
-            ((94 + if self.tab == 0 { 0 } else { self.scroll }) as f64 * scale).round() as u32;
-        let left = (offset_x as f64 * scale).round() as usize;
+        self.content_height = match self.tab {
+            0 => self.library(&mut body, engine, body_w, viewport),
+            1 => self.active(&mut body, engine, body_w, viewport),
+            2 => self.profiles(&mut body, engine, body_w, viewport),
+            _ => self.settings(&mut body, engine, body_w),
+        };
+        self.scroll_max = (self.content_height - viewport).max(0);
+        self.scroll = self.scroll.clamp(0, self.scroll_max);
+        let offset = if virtualized { 0 } else { self.scroll };
+        let top_px = (top as f64 * scale).round() as usize;
+        let left = ((side + 24) as f64 * scale).round() as usize;
         let stride = body.width() as usize * 4;
-        for y in top..bottom {
-            let source = (y + source_offset) as usize * stride;
-            let destination = (y as usize * physical_width as usize + left) * 4;
-            pix.data_mut()[destination..destination + stride]
-                .copy_from_slice(&body.data()[source..source + stride]);
+        let source_y = (offset as f64 * scale).round() as usize;
+        let rows = ((viewport as f64 * scale).ceil() as usize)
+            .min(body.height() as usize - source_y)
+            .min(pix.height() as usize - top_px);
+        for row in 0..rows {
+            let source = (source_y + row) * stride;
+            let destination = ((top_px + row) * pix.width() as usize + left) * 4;
+            let len = stride.min(pix.width() as usize * 4 - left * 4);
+            pix.data_mut()[destination..destination + len]
+                .copy_from_slice(&body.data()[source..source + len]);
         }
-        let mut body_hits = self.hits.split_off(header_hits);
-        for hit in &mut body_hits {
-            hit.rect.x += offset_x;
-            hit.rect.y -= 94 + if self.tab == 0 { 0 } else { self.scroll };
-            let bottom = (hit.rect.y + hit.rect.h).min(h - 32);
-            hit.rect.y = hit.rect.y.max(64);
-            hit.rect.h = (bottom - hit.rect.y).max(0);
+        let mut hits = self.hits.split_off(header_hits);
+        for hit in &mut hits {
+            hit.rect.x += side + 24;
+            hit.rect.y -= offset;
+            let end = (hit.rect.y + hit.rect.h).min(viewport);
+            hit.rect.y = hit.rect.y.max(0);
+            hit.rect.h = (end - hit.rect.y).max(0);
+            hit.rect.y += top;
         }
         self.hits
-            .extend(body_hits.into_iter().filter(|hit| hit.rect.h > 0));
+            .extend(hits.into_iter().filter(|h| h.rect.h > 0 && h.rect.w > 0));
         if self.scroll_max > 0 {
-            let viewport = h - 96;
             let thumb = (viewport as f64 * viewport as f64 / (viewport + self.scroll_max) as f64)
                 .max(24.0) as i32;
             self.rect(
                 &mut pix,
                 &Rect {
                     x: w - 8,
-                    y: 64 + (viewport - thumb) * self.scroll / self.scroll_max,
+                    y: top + (viewport - thumb) * self.scroll / self.scroll_max,
                     w: 3,
                     h: thumb,
                 },
@@ -741,57 +1272,86 @@ impl Ui {
                 2.0,
             );
         }
+        let hovered = self.hovered.and_then(|i| self.hits.get(i)).and_then(|hit| {
+            if let Action::ToggleGif(path) = &hit.action {
+                Some(format!(
+                    "{} · {}",
+                    path.file_stem().unwrap_or_default().to_string_lossy(),
+                    self.tr(
+                        if engine.widgets.values().any(|widget| widget.path == *path) {
+                            "click_stop"
+                        } else {
+                            "click_play"
+                        }
+                    )
+                ))
+            } else {
+                None
+            }
+        });
         let status = self
             .error
             .as_ref()
             .or(engine.error.as_ref())
             .or(self.notice.as_ref())
             .cloned()
-            .unwrap_or_else(|| format!("{} active", engine.widgets.len()));
+            .or(hovered)
+            .unwrap_or_else(|| {
+                if self.windowed {
+                    String::new()
+                } else {
+                    no_count(
+                        &self.tr(if engine.widgets.len() == 1 {
+                            "active.one"
+                        } else {
+                            "active.other"
+                        }),
+                        engine.widgets.len(),
+                    )
+                }
+            });
         self.text(
             &mut pix,
             &status,
-            20,
-            h - 26,
+            side + 24,
+            h - 24,
             11,
             if self.error.is_some() {
-                Color::from_rgba8(255, 170, 170, 255)
+                self.theme.primary
             } else {
                 self.theme.muted
             },
-            w - 40,
+            w - side - 48,
         );
         self.dirty = false;
         pix
     }
-    fn library(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, _h: i32) {
-        self.input(pix, "search", "Search GIFs and folders…", 20, 158, w - 152);
-        self.button(pix, "Refresh", w - 124, 158, 104, Action::Refresh, false);
+    fn library(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) -> i32 {
         let files = self.filtered();
-        let cell = (w - 64) / 3;
-        let rowheight = 150;
-        let first = (self.scroll / rowheight).max(0) as usize;
-        for (index, path) in files.iter().enumerate().skip(first * 3).take(18) {
-            let x = 20 + (index % 3) as i32 * (cell + 12);
-            let y = 210 + (index / 3) as i32 * rowheight - self.scroll;
-            let rect = Rect {
-                x,
-                y,
-                w: cell,
-                h: rowheight - 10,
-            };
-
+        let columns = self.columns;
+        let cell = (w - (columns as i32 - 1) * 16) / columns as i32;
+        let first = (self.scroll / 150).max(0) as usize;
+        let rows = (h / 150 + 2).max(1) as usize;
+        for (index, path) in files
+            .iter()
+            .enumerate()
+            .skip(first * columns)
+            .take(rows * columns)
+        {
+            let x = (index % columns) as i32 * (cell + 16);
+            let y = 64 + (index / columns) as i32 * 150 - self.scroll;
             if let Some(anim) = engine
                 .assets
                 .get(path)
                 .and_then(|a| a.animation.as_ref())
                 .or_else(|| engine.thumbnails.get(path))
             {
-                let factor = ((cell - 24) as f64 / anim.width as f64)
-                    .min((rowheight - 62) as f64 / anim.height as f64);
+                let factor =
+                    ((cell - 12) as f64 / anim.width as f64).min(108.0 / anim.height as f64);
                 let rw = (anim.width as f64 * factor).round() as i32;
                 let rh = (anim.height as f64 * factor).round() as i32;
-                let frame = if self.hovered == Some(self.hits.len()) {
+                let frame = if self.hover_action.as_ref() == Some(&Action::ToggleGif(path.clone()))
+                {
                     anim.frame_at(engine.now() * 1000.0).0
                 } else {
                     0
@@ -802,7 +1362,7 @@ impl Ui {
                     signature: Signature {
                         rect: Rect {
                             x: ((x + (cell - rw) / 2) as f32 * self.paint_scale).round() as i32,
-                            y: ((y + 8) as f32 * self.paint_scale).round() as i32,
+                            y: ((y + (108 - rh) / 2) as f32 * self.paint_scale).round() as i32,
                             w: (rw as f32 * self.paint_scale).round() as i32,
                             h: (rh as f32 * self.paint_scale).round() as i32,
                         },
@@ -811,518 +1371,1037 @@ impl Ui {
                         flip_h: false,
                         flip_v: false,
                         editing: false,
-                        edit_color: 0xffcbb9ff,
+                        edit_color: 0,
                     },
                 };
                 composite_preview(pix, &item);
             }
-            self.text(
-                pix,
-                &path.file_stem().unwrap_or_default().to_string_lossy(),
-                x + 12,
-                y + rowheight - 44,
-                13,
-                self.theme.foreground,
-                cell - 24,
-            );
             let active = engine
                 .widgets
                 .values()
                 .filter(|widget| widget.path == *path)
                 .count();
             if active > 0 {
-                self.text(
+                self.outline(
                     pix,
-                    &format!("{active} active"),
-                    x + 12,
-                    y + rowheight - 26,
-                    11,
+                    &Rect {
+                        x,
+                        y,
+                        w: cell,
+                        h: 108,
+                    },
                     self.theme.primary,
-                    cell - 24,
+                    9.0,
                 );
             }
-            self.hits.push(Hit {
-                rect,
-                action: Action::ToggleGif(path.clone()),
-            });
-        }
-        if files.is_empty() {
-            self.text(pix,"No matching GIFs. Add files to your collection or change its directory in Settings.",20,230,14,self.theme.muted,w-40);
-        }
-    }
-    fn active(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) {
-        let list_width = 220.min(w / 3);
-        let visible = ((h - 380) / 46).max(1) as usize;
-        let rows = engine
-            .widgets
-            .values()
-            .skip(self.page * visible)
-            .take(visible)
-            .collect::<Vec<_>>();
-        for (i, widget) in rows.iter().enumerate() {
-            self.button(
-                pix,
-                &widget.id,
-                20,
-                166 + i as i32 * 46,
-                list_width,
-                Action::Select(widget.id.clone()),
-                self.selected.as_deref() == Some(&widget.id),
-            );
-        }
-        self.button(pix, "‹", 20, h - 72, 46, Action::Page(-1), false);
-        self.button(pix, "›", 74, h - 72, 46, Action::Page(1), false);
-        self.text(
-            pix,
-            "All GIFs",
-            20,
-            h - 188,
-            12,
-            self.theme.muted,
-            list_width,
-        );
-        let paused = !engine.widgets.is_empty()
-            && engine.widgets.values().all(|widget| widget.settings.paused);
-        let locked = engine.widgets.values().all(|widget| widget.settings.locked);
-        let visible = engine
-            .widgets
-            .values()
-            .any(|widget| widget.settings.visible);
-        for (i, (label, action)) in [
-            (
-                if paused { "Play" } else { "Pause" },
-                if paused { "play" } else { "pause" },
-            ),
-            (
-                if locked { "Edit" } else { "Lock" },
-                if locked { "unlock" } else { "lock" },
-            ),
-            (
-                if visible { "Hide" } else { "Show" },
-                if visible { "hide" } else { "show" },
-            ),
-            ("Stop", "stop-all"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            self.button(
-                pix,
-                label,
-                20 + (i % 2) as i32 * (list_width / 2),
-                h - 164 + (i / 2) as i32 * 44,
-                list_width / 2 - 6,
-                Action::Command(json!({"action":action,"id":"*"})),
-                false,
-            );
-        }
-        let Some(widget) = self.selected.as_ref().and_then(|id| engine.widgets.get(id)) else {
             self.text(
                 pix,
-                "Start a GIF from the collection.",
-                list_width + 40,
-                176,
-                16,
-                self.theme.muted,
-                w - list_width - 60,
+                &path.file_stem().unwrap_or_default().to_string_lossy(),
+                x + 4,
+                y + 118,
+                13,
+                if active > 0 {
+                    self.theme.primary
+                } else {
+                    self.theme.muted
+                },
+                cell - 8,
             );
-            return;
+            let top = y.max(64);
+            let end = (y + 140).min(h);
+            if end > top {
+                self.hits.push(Hit {
+                    rect: Rect {
+                        x,
+                        y: top,
+                        w: cell,
+                        h: end - top,
+                    },
+                    action: Action::ToggleGif(path.clone()),
+                });
+            }
+        }
+        // Paint the fixed search row last, so partially visible images never cover it.
+        self.rect(
+            pix,
+            &Rect {
+                x: 0,
+                y: 0,
+                w,
+                h: 60,
+            },
+            self.theme.surface,
+            0.0,
+        );
+        self.input(pix, "search", &self.tr("search"), 0, 0, w - 120);
+        let query = self.fields.get("search").is_some_and(|v| !v.is_empty());
+        self.button(
+            pix,
+            &self.tr(if query {
+                "clear_search_short"
+            } else {
+                "refresh_short"
+            }),
+            w - 108,
+            0,
+            108,
+            if query {
+                Action::ClearSearch
+            } else {
+                Action::Refresh
+            },
+            false,
+        );
+        if files.is_empty() {
+            self.text(
+                pix,
+                &self.tr(if self.files.is_empty() {
+                    "collection_empty"
+                } else {
+                    "search_empty"
+                }),
+                0,
+                104,
+                20,
+                self.theme.foreground,
+                w,
+            );
+            self.text(
+                pix,
+                &self.tr("collection_empty_hint"),
+                0,
+                140,
+                13,
+                self.theme.muted,
+                w,
+            );
+            self.button(
+                pix,
+                &self.tr(if self.files.is_empty() {
+                    "settings_tab"
+                } else {
+                    "clear_search"
+                }),
+                0,
+                184,
+                180,
+                if self.files.is_empty() {
+                    Action::Tab(3)
+                } else {
+                    Action::ClearSearch
+                },
+                true,
+            );
+        }
+        (files.len().div_ceil(columns) as i32 * 150 + 64).max(h)
+    }
+    fn active(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) -> i32 {
+        if engine.widgets.is_empty() {
+            self.text(
+                pix,
+                &self.tr("no_active_title"),
+                0,
+                28,
+                24,
+                self.theme.foreground,
+                w,
+            );
+            self.text(pix, &self.tr("no_active"), 0, 72, 14, self.theme.muted, w);
+            self.button(
+                pix,
+                &self.tr("browse_gifs"),
+                0,
+                122,
+                200,
+                Action::Tab(0),
+                true,
+            );
+            return 184;
+        }
+        let list = if w >= 720 { 180 } else { 0 };
+        let x = if list > 0 { list + 24 } else { 0 };
+        let cw = w - x;
+        if list > 0 {
+            self.text(
+                pix,
+                &self.tr("active_tab"),
+                0,
+                0,
+                13,
+                self.theme.muted,
+                list,
+            );
+            let per_page = ((h - 110) / 48).max(1) as usize;
+            self.page = self
+                .page
+                .min(engine.widgets.len().saturating_sub(1) / per_page);
+            for (i, widget) in engine
+                .widgets
+                .values()
+                .skip(self.page * per_page)
+                .take(per_page)
+                .enumerate()
+            {
+                self.button(
+                    pix,
+                    &widget.id,
+                    0,
+                    30 + i as i32 * 48,
+                    list,
+                    Action::Select(widget.id.clone()),
+                    self.selected.as_deref() == Some(&widget.id),
+                );
+            }
+            if engine.widgets.len() > per_page {
+                self.button(pix, "‹", 0, h - 54, 50, Action::Page(-1), false);
+                self.button(pix, "›", 58, h - 54, 50, Action::Page(1), false);
+            }
+        }
+        let selected = self.selected.clone();
+        let Some(widget) = selected.as_ref().and_then(|id| engine.widgets.get(id)) else {
+            return h;
         };
-        let x = list_width + 40;
-        let cw = w - x - 20;
         let id = &widget.id;
         let s = &widget.settings;
-        self.text(pix, &widget.id, x, 162, 16, self.theme.foreground, cw);
+        let mut y = 0;
+        if list == 0 && engine.widgets.len() > 1 {
+            if self.fold(
+                pix,
+                "selector",
+                &format!("{} · {}", self.tr("selected_gif"), id),
+                x,
+                y,
+                cw,
+            ) {
+                y += 50;
+                self.page = self.page.min(engine.widgets.len().saturating_sub(1) / 8);
+                for item in engine.widgets.values().skip(self.page * 8).take(8) {
+                    self.button(
+                        pix,
+                        &item.id,
+                        x,
+                        y,
+                        cw,
+                        Action::Select(item.id.clone()),
+                        item.id == *id,
+                    );
+                    y += 44;
+                }
+                if engine.widgets.len() > 8 {
+                    self.button(pix, "‹", x, y, 50, Action::Page(-1), false);
+                    self.button(pix, "›", x + 58, y, 50, Action::Page(1), false);
+                    y += 48;
+                }
+            } else {
+                y += 50;
+            }
+        }
+        self.text(pix, id, x, y, 21, self.theme.foreground, cw);
+        y += 32;
         self.text(
             pix,
-            &widget.path.to_string_lossy(),
+            &self.tr(if !s.visible {
+                "hidden"
+            } else if s.paused {
+                "paused"
+            } else {
+                "playing"
+            }),
             x,
-            186,
-            11,
+            y,
+            12,
             self.theme.muted,
             cw,
         );
-        for (i, (title, action)) in [
+        y += 30;
+        let columns = if cw >= 520 { 4 } else { 2 };
+        let bw = (cw - (columns - 1) * 8) / columns;
+        for (i, (label, action, active)) in [
             (
-                if s.paused { "Play" } else { "Pause" },
                 if s.paused { "play" } else { "pause" },
+                if s.paused { "play" } else { "pause" },
+                true,
             ),
             (
-                if s.locked { "Edit" } else { "Lock" },
+                if s.locked { "edit" } else { "done_editing" },
                 if s.locked { "unlock" } else { "lock" },
+                !s.locked,
             ),
             (
-                if s.visible { "Hide" } else { "Show" },
                 if s.visible { "hide" } else { "show" },
+                if s.visible { "hide" } else { "show" },
+                false,
             ),
-            ("Stop", "quit"),
+            ("stop", "quit", false),
         ]
         .iter()
         .enumerate()
         {
             self.button(
                 pix,
-                title,
-                x + i as i32 * (cw / 4),
-                212,
-                cw / 4 - 6,
+                &self.tr(label),
+                x + (i as i32 % columns) * (bw + 8),
+                y + (i as i32 / columns) * 46,
+                bw,
                 Action::Command(json!({"action":action,"id":id})),
-                false,
+                *active,
             );
         }
-        self.input(pix, "x", &format!("X: {:.0}", s.x), x, 260, cw / 2 - 6);
-        self.input(pix, "y", &format!("Y: {:.0}", s.y), x + cw / 2, 260, cw / 2);
-        for (i, (label, action, key, min, max, value)) in [
-            ("Size", "scale", "scale", 0.1, 5.0, s.scale),
-            ("Opacity", "opacity", "opacity", 0.0, 1.0, s.opacity),
-            ("Speed", "speed", "speed", 0.1, 10.0, s.speed),
-            (
-                "Jump interval",
-                "jump-rate",
-                "seconds",
-                0.7,
-                60.0,
-                s.jump_rate,
-            ),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let y = 314 + i as i32 * 43;
+        y += if columns == 4 { 54 } else { 100 };
+        if !s.locked {
             self.text(
                 pix,
-                &format!("{label}  {value:.2}"),
+                &self.tr("edit_hint_short"),
                 x,
                 y,
-                13,
-                self.theme.muted,
-                180,
-            );
-            let rect = Rect {
-                x: x + 188,
-                y: y + 4,
-                w: cw - 188,
-                h: 26,
-            };
-            self.rect(
-                pix,
-                &Rect {
-                    x: rect.x,
-                    y: rect.y + 9,
-                    w: rect.w,
-                    h: 8,
-                },
-                self.theme.variant,
-                4.0,
-            );
-            let fill = (((value - min) / (max - min)) * rect.w as f64) as i32;
-            self.rect(
-                pix,
-                &Rect {
-                    x: rect.x,
-                    y: rect.y + 9,
-                    w: fill.max(1),
-                    h: 8,
-                },
+                12,
                 self.theme.primary,
-                4.0,
-            );
-            self.rect(
-                pix,
-                &Rect {
-                    x: rect.x + fill - 8,
-                    y: rect.y + 4,
-                    w: 18,
-                    h: 18,
-                },
-                self.theme.on_primary,
-                9.0,
-            );
-            self.outline(
-                pix,
-                &Rect {
-                    x: rect.x + fill - 8,
-                    y: rect.y + 4,
-                    w: 18,
-                    h: 18,
-                },
-                self.theme.primary,
-                9.0,
-            );
-            self.hits.push(Hit {
-                rect,
-                action: Action::Slider {
-                    id: id.clone(),
-                    action: action.to_string(),
-                    key: key.to_string(),
-                    min: *min,
-                    max: *max,
-                },
-            });
-        }
-        for (i, (title, action)) in [
-            ("Bounce", "bounce"),
-            ("Hop", "hop"),
-            ("Auto jump", "jump"),
-            ("Reset", "reset"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            self.button(
-                pix,
-                title,
-                x + i as i32 * (cw / 4),
-                490,
-                cw / 4 - 6,
-                Action::Command(json!({"action":action,"id":id})),
-                (*action == "bounce" && s.bouncing) || (*action == "jump" && s.jumping),
-            );
-        }
-        for (i, (title, mode)) in [
-            ("Flip H", "toggle-h"),
-            ("Flip V", "toggle-v"),
-            ("Center", "center"),
-            ("Canvas", "canvas"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let cmd = match *mode {
-                "center" => json!({"action":"corner","id":id,"position":"center"}),
-                "canvas" => json!({"action":"canvas","id":id}),
-                _ => json!({"action":"flip","id":id,"mode":mode}),
-            };
-            self.button(
-                pix,
-                title,
-                x + i as i32 * (cw / 4),
-                536,
-                cw / 4 - 6,
-                Action::Command(cmd),
-                (*mode == "toggle-h" && s.flip_h)
-                    || (*mode == "toggle-v" && s.flip_v)
-                    || (*mode == "canvas" && s.canvas),
-            );
-        }
-        for (i, pos) in ["tl", "tr", "bl", "br"].iter().enumerate() {
-            self.button(
-                pix,
-                pos,
-                x + i as i32 * 56,
-                582,
-                48,
-                Action::Command(json!({"action":"corner","id":id,"position":pos})),
-                false,
-            );
-        }
-        let layer = match s.layer.as_str() {
-            "overlay" => "top",
-            "top" => "bottom",
-            "bottom" => "background",
-            _ => "overlay",
-        };
-        self.button(
-            pix,
-            &format!("Layer: {}", s.layer),
-            x + 240,
-            582,
-            (cw - 240).max(48),
-            Action::Command(json!({"action":"layer","id":id,"layer":layer})),
-            false,
-        );
-        if let Some(output) = engine
-            .outputs
-            .iter()
-            .position(|o| o.name == s.output)
-            .or(Some(0))
-            .and_then(|i| engine.outputs.get((i + 1) % engine.outputs.len().max(1)))
-        {
-            self.button(
-                pix,
-                &format!("Output: {}", s.output),
-                x,
-                628,
                 cw,
-                Action::Command(json!({"action":"output","id":id,"output":output.name})),
-                false,
             );
+            y += 38;
         }
-        let mut duplicate = serde_json::to_value(&widget.settings).unwrap();
-        duplicate["x"] = json!(widget.settings.x + 30.0);
-        duplicate["y"] = json!(widget.settings.y + 30.0);
-        self.button(
-            pix,
-            "Duplicate",
-            x,
-            680,
-            132,
-            Action::Command(json!({"action":"spawn","gif":widget.path,"state":duplicate})),
-            false,
-        );
-    }
-    fn profiles(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) {
-        self.input(
-            pix,
-            "profile",
-            "Profile name — Enter saves current layout",
-            20,
-            166,
-            w - 40,
-        );
-        self.input(
-            pix,
-            "rename",
-            "New profile name for Rename",
-            20,
-            210,
-            w - 40,
-        );
-        let visible = ((h - 330) / 46).max(1) as usize;
-        for (i, (name, _)) in engine
-            .store
-            .profiles
-            .as_object()
-            .unwrap()
+        for (label, key, action, min, max, value, display) in [
+            (
+                "scale",
+                "scale",
+                "scale",
+                0.1,
+                5.0,
+                s.scale,
+                format!("{:.0}%", s.scale * 100.0),
+            ),
+            (
+                "opacity",
+                "opacity",
+                "opacity",
+                0.0,
+                1.0,
+                s.opacity,
+                format!("{:.0}%", s.opacity * 100.0),
+            ),
+            (
+                "speed",
+                "speed",
+                "speed",
+                0.1,
+                10.0,
+                s.speed,
+                format!("{:.2}×", s.speed),
+            ),
+        ] {
+            self.slider_control(
+                pix,
+                id,
+                key,
+                action,
+                &self.tr(label),
+                &display,
+                value,
+                min,
+                max,
+                x,
+                y,
+                cw,
+            );
+            y += 68;
+        }
+        let open = self.fold(pix, "placement", &self.tr("placement"), x, y, cw);
+        y += 50;
+        if open {
+            self.text(pix, "X", x, y, 12, self.theme.muted, cw / 2);
+            self.text(pix, "Y", x + cw / 2 + 4, y, 12, self.theme.muted, cw / 2);
+            y += 22;
+            self.input(pix, "x", &format!("{:.0}", s.x), x, y, cw / 2 - 4);
+            self.input(
+                pix,
+                "y",
+                &format!("{:.0}", s.y),
+                x + cw / 2 + 4,
+                y,
+                cw / 2 - 4,
+            );
+            y += 48;
+            let width = (cw - 32) / 5;
+            for (i, (label, pos)) in [
+                ("↖", "tl"),
+                ("↗", "tr"),
+                ("↙", "bl"),
+                ("↘", "br"),
+                (&self.tr("center"), "center"),
+            ]
             .iter()
-            .skip(self.page * visible)
-            .take(visible)
             .enumerate()
-        {
-            let y = 260 + i as i32 * 46;
-            self.button(
+            {
+                self.button(
+                    pix,
+                    label,
+                    x + i as i32 * (width + 8),
+                    y,
+                    width,
+                    Action::Command(json!({"action":"corner","id":id,"position":pos})),
+                    false,
+                );
+            }
+            y += 50;
+            let show = self.fold(
                 pix,
-                name,
-                20,
+                "outputs",
+                &format!("{} · {}", self.tr("monitor"), s.output),
+                x,
                 y,
-                w - 400,
-                Action::Command(json!({"action":"profile-apply","name":name})),
-                false,
+                cw,
             );
-            self.button(
-                pix,
-                "Rename",
-                w - 368,
-                y,
-                108,
-                Action::Rename(name.clone()),
-                false,
-            );
-            self.button(
-                pix,
-                "Overwrite",
-                w - 248,
-                y,
-                108,
-                Action::Command(json!({"action":"profile-save","name":name})),
-                false,
-            );
-            self.button(
-                pix,
-                "Delete",
-                w - 128,
-                y,
-                108,
-                Action::Command(json!({"action":"profile-delete","name":name})),
-                false,
-            );
+            y += 50;
+            if show {
+                for output in &engine.outputs {
+                    self.button(
+                        pix,
+                        &output.name,
+                        x,
+                        y,
+                        cw,
+                        Action::Choose(
+                            "outputs".into(),
+                            json!({"action":"output","id":id,"output":output.name}),
+                        ),
+                        s.output == output.name,
+                    );
+                    y += 44;
+                }
+            }
+            y += 8;
         }
-        self.button(pix, "Previous", 20, h - 72, 108, Action::Page(-1), false);
-        self.button(pix, "Next", 136, h - 72, 108, Action::Page(1), false);
+        let open = self.fold(pix, "motion", &self.tr("motion"), x, y, cw);
+        y += 50;
+        if open {
+            self.toggle(
+                pix,
+                &self.tr("bounce"),
+                "",
+                x,
+                y,
+                cw,
+                s.bouncing,
+                Action::Command(
+                    json!({"action":if s.bouncing{"stop-bounce"}else{"bounce"},"id":id}),
+                ),
+            );
+            y += 44;
+            self.toggle(
+                pix,
+                &self.tr("auto_jump"),
+                "",
+                x,
+                y,
+                cw,
+                s.jumping,
+                Action::Command(json!({"action":"jump","id":id})),
+            );
+            y += 44;
+            if s.jumping {
+                self.slider_control(
+                    pix,
+                    id,
+                    "seconds",
+                    "jump-rate",
+                    &self.tr("jump_rate"),
+                    &format!("{:.1} s", s.jump_rate),
+                    s.jump_rate,
+                    0.7,
+                    60.0,
+                    x,
+                    y,
+                    cw,
+                );
+                y += 68;
+            }
+            self.button(
+                pix,
+                &self.tr("hop"),
+                x,
+                y,
+                132,
+                Action::Command(json!({"action":"hop","id":id})),
+                false,
+            );
+            y += 50;
+        }
+        let open = self.fold(pix, "advanced", &self.tr("advanced"), x, y, cw);
+        y += 50;
+        if open {
+            self.button(
+                pix,
+                &self.tr("flip_h"),
+                x,
+                y,
+                cw / 2 - 4,
+                Action::Command(json!({"action":"flip","id":id,"mode":"toggle-h"})),
+                s.flip_h,
+            );
+            self.button(
+                pix,
+                &self.tr("flip_v"),
+                x + cw / 2 + 4,
+                y,
+                cw / 2 - 4,
+                Action::Command(json!({"action":"flip","id":id,"mode":"toggle-v"})),
+                s.flip_v,
+            );
+            y += 50;
+            let show = self.fold(
+                pix,
+                "layers",
+                &format!(
+                    "{} · {}",
+                    self.tr("layer"),
+                    self.tr(&format!("layer_{}", s.layer))
+                ),
+                x,
+                y,
+                cw,
+            );
+            y += 50;
+            if show {
+                for value in ["overlay", "top", "bottom", "background"] {
+                    self.button(
+                        pix,
+                        &self.tr(&format!("layer_{value}")),
+                        x,
+                        y,
+                        cw,
+                        Action::Choose(
+                            "layers".into(),
+                            json!({"action":"layer","id":id,"layer":value}),
+                        ),
+                        s.layer == value,
+                    );
+                    y += 44;
+                }
+            }
+            self.toggle(
+                pix,
+                &self.tr("canvas"),
+                "",
+                x,
+                y,
+                cw,
+                s.canvas,
+                Action::Command(json!({"action":"canvas","id":id})),
+            );
+            y += 48;
+            let mut duplicate = serde_json::to_value(s).unwrap();
+            duplicate["x"] = json!(s.x + 30.0);
+            duplicate["y"] = json!(s.y + 30.0);
+            self.button(
+                pix,
+                &self.tr("duplicate"),
+                x,
+                y,
+                cw / 2 - 4,
+                Action::Command(json!({"action":"spawn","gif":widget.path,"state":duplicate})),
+                false,
+            );
+            self.button(
+                pix,
+                &self.tr("reset"),
+                x + cw / 2 + 4,
+                y,
+                cw / 2 - 4,
+                Action::Command(json!({"action":"reset","id":id})),
+                false,
+            );
+            y += 50;
+            self.text(
+                pix,
+                &widget.path.to_string_lossy(),
+                x,
+                y,
+                11,
+                self.theme.muted,
+                cw,
+            );
+            y += 32;
+        }
+        if engine.widgets.len() > 1 {
+            let open = self.fold(pix, "all", &self.tr("all_gifs"), x, y, cw);
+            y += 50;
+            if open {
+                let paused = engine.widgets.values().all(|w| w.settings.paused);
+                let locked = engine.widgets.values().all(|w| w.settings.locked);
+                let visible = engine.widgets.values().any(|w| w.settings.visible);
+                for (i, (label, action)) in [
+                    (
+                        if paused { "play_all" } else { "pause_all" },
+                        if paused { "play" } else { "pause" },
+                    ),
+                    (
+                        if locked { "edit_all" } else { "done_editing" },
+                        if locked { "unlock" } else { "lock" },
+                    ),
+                    (
+                        if visible { "hide_all" } else { "show_all" },
+                        if visible { "hide" } else { "show" },
+                    ),
+                    ("stop-all", "stop-all"),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    self.button(
+                        pix,
+                        &self.tr(label),
+                        x + (i % 2) as i32 * (cw / 2 + 4),
+                        y + (i / 2) as i32 * 46,
+                        cw / 2 - 4,
+                        Action::Command(json!({"action":action,"id":"*"})),
+                        false,
+                    );
+                }
+                y += 98;
+            }
+        }
+        if let Some(error) = engine
+            .assets
+            .get(&widget.path)
+            .and_then(|a| a.error.as_ref())
+        {
+            self.text(pix, error, x, y, 13, self.theme.primary, cw);
+            y += 38;
+        }
+        y + 16
     }
-    fn settings(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, _h: i32) {
+    fn profiles(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32, h: i32) -> i32 {
+        let profiles = engine.store.profiles.as_object().unwrap();
+        let row_hit_start = self.hits.len();
+        let narrow = w < 650;
+        let row_height = if narrow { 184 } else { 136 };
+        let first = (self.scroll / row_height).max(0) as usize;
+        for (index, (name, _)) in profiles
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take((h / row_height + 2) as usize)
+        {
+            let y = 100 + index as i32 * row_height - self.scroll;
+            self.text(pix, name, 0, y, 17, self.theme.foreground, w);
+            let columns = if narrow { 2 } else { 4 };
+            let bw = (w - (columns - 1) * 8) / columns;
+            let confirm = self.sections.contains(&format!("delete:{name}"));
+            for (i, (label, action)) in [
+                (
+                    "apply",
+                    Action::Command(json!({"action":"profile-apply","name":name})),
+                ),
+                (
+                    "overwrite",
+                    Action::Command(json!({"action":"profile-save","name":name})),
+                ),
+                ("rename", Action::Rename(name.clone())),
+                (
+                    if confirm { "confirm_delete" } else { "delete" },
+                    if confirm {
+                        Action::Command(json!({"action":"profile-delete","name":name}))
+                    } else {
+                        Action::Section(format!("delete:{name}"))
+                    },
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                self.button(
+                    pix,
+                    &self.tr(label),
+                    (i as i32 % columns) * (bw + 8),
+                    y + 30 + (i as i32 / columns) * 44,
+                    bw,
+                    action,
+                    false,
+                );
+            }
+            if self.sections.contains(&format!("rename:{name}")) {
+                self.input(
+                    pix,
+                    "rename",
+                    &self.tr("rename_name"),
+                    0,
+                    y + if narrow { 120 } else { 76 },
+                    w - 112,
+                );
+                self.button(
+                    pix,
+                    &self.tr("save"),
+                    w - 100,
+                    y + if narrow { 120 } else { 76 },
+                    100,
+                    Action::SaveRename,
+                    false,
+                );
+            } else if confirm {
+                self.button(
+                    pix,
+                    &self.tr("cancel"),
+                    0,
+                    y + if narrow { 120 } else { 76 },
+                    100,
+                    Action::Section(format!("delete:{name}")),
+                    false,
+                );
+            }
+        }
+        for hit in &mut self.hits[row_hit_start..] {
+            let end = (hit.rect.y + hit.rect.h).min(h);
+            hit.rect.y = hit.rect.y.max(94);
+            hit.rect.h = (end - hit.rect.y).max(0);
+        }
+        // Sticky create row remains visible while the layout list scrolls.
+        self.rect(
+            pix,
+            &Rect {
+                x: 0,
+                y: 0,
+                w,
+                h: 94,
+            },
+            self.theme.surface,
+            0.0,
+        );
         self.text(
             pix,
-            "Collection directory — type an absolute path and press Enter",
-            20,
-            170,
+            &self.tr("new_layout"),
+            0,
+            0,
             14,
-            self.theme.muted,
-            w - 40,
+            self.theme.foreground,
+            w,
         );
+        self.input(pix, "profile", &self.tr("layout_name"), 0, 30, w - 120);
+        let exists = self
+            .fields
+            .get("profile")
+            .is_some_and(|name| profiles.contains_key(name));
+        self.button(
+            pix,
+            &self.tr(if exists { "overwrite" } else { "save" }),
+            w - 108,
+            30,
+            108,
+            Action::SaveProfile,
+            true,
+        );
+        if profiles.is_empty() {
+            self.text(pix, &self.tr("no_layouts"), 0, 120, 16, self.theme.muted, w);
+        }
+        (100 + profiles.len() as i32 * row_height).max(h)
+    }
+    fn settings(&mut self, pix: &mut Pixmap, engine: &Engine, w: i32) -> i32 {
+        let mut y = 0;
+        self.text(
+            pix,
+            &self.tr("collection"),
+            0,
+            y,
+            16,
+            self.theme.foreground,
+            w,
+        );
+        y += 30;
+        self.text(
+            pix,
+            &self.tr("directory_hint"),
+            0,
+            y,
+            12,
+            self.theme.muted,
+            w,
+        );
+        y += 26;
         self.input(
             pix,
             "directory",
             &engine.paths.gif_dir.to_string_lossy(),
-            20,
-            202,
-            w - 40,
+            0,
+            y,
+            w - 120,
         );
-        let restore = engine
-            .store
-            .settings
-            .get("restore")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
         self.button(
             pix,
-            if restore {
-                "Restore at startup: on"
-            } else {
-                "Restore at startup: off"
-            },
-            20,
-            260,
-            300,
-            Action::Command(json!({"action":"settings","settings":{"restore":!restore}})),
+            &self.tr("save"),
+            w - 108,
+            y,
+            108,
+            Action::SaveDirectory,
+            false,
+        );
+        y += 62;
+        let restore = engine.store.settings["restore"].as_bool().unwrap_or(true);
+        self.toggle(
+            pix,
+            &self.tr("restore_short"),
+            &self.tr("restore_hint"),
+            0,
+            y,
+            w,
             restore,
+            Action::Command(json!({"action":"settings","settings":{"restore":!restore}})),
         );
-        self.text(
-            pix,
-            "Overlays never request keyboard focus. Locked surfaces have an empty input region.",
-            20,
-            326,
-            14,
-            self.theme.foreground,
-            w - 40,
-        );
-        self.text(pix,"Drag unlocked GIFs with the left mouse button. Scroll to resize; right click opens controls.",20,356,14,self.theme.muted,w-40);
-        self.text(pix,"Overlay stacking above fullscreen windows depends on your compositor and its configuration.",20,400,14,self.theme.muted,w-40);
-        self.button(
-            pix,
-            "Reload collection",
-            20,
-            454,
-            180,
-            Action::Refresh,
-            false,
-        );
-        self.button(
-            pix,
-            "Quit daemon",
-            212,
-            454,
-            180,
-            Action::Command(json!({"action":"quit-daemon"})),
-            false,
-        );
-        let level = crate::diagnostics::level_name();
-        let next = match level {
-            "info" => "debug",
-            "debug" => "trace",
-            "trace" => "off",
-            _ => "info",
-        };
-        self.button(
-            pix,
-            &format!("Logs: {level}"),
-            20,
-            512,
-            180,
-            Action::Command(json!({"action":"logs-level","level":next})),
-            level == "trace",
-        );
-        self.button(
-            pix,
-            "Export log folder",
-            212,
-            512,
-            180,
-            Action::Command(json!({"action":"logs-export"})),
-            false,
-        );
+        y += 72;
+        let open = self.fold(pix, "diagnostics", &self.tr("doctor"), 0, y, w);
+        y += 50;
+        if open {
+            self.text(
+                pix,
+                &self.tr("diagnostics_hint"),
+                0,
+                y,
+                12,
+                self.theme.muted,
+                w,
+            );
+            y += 32;
+            let level = crate::diagnostics::level_name();
+            let show = self.fold(
+                pix,
+                "log-level",
+                &format!(
+                    "{} · {}",
+                    self.tr("logs_level"),
+                    self.tr(&format!("log_{level}"))
+                ),
+                0,
+                y,
+                w,
+            );
+            y += 50;
+            if show {
+                for value in ["info", "debug", "trace", "warn", "error", "off"] {
+                    self.button(
+                        pix,
+                        &self.tr(&format!("log_{value}")),
+                        0,
+                        y,
+                        w,
+                        Action::Choose(
+                            "log-level".into(),
+                            json!({"action":"logs-level","level":value}),
+                        ),
+                        level == value,
+                    );
+                    y += 44;
+                }
+            }
+            if level == "trace" {
+                self.text(pix, &self.tr("trace_hint"), 0, y, 12, self.theme.muted, w);
+                y += 40;
+            }
+            self.button(
+                pix,
+                &self.tr("logs_export"),
+                0,
+                y,
+                200.min(w),
+                Action::Command(json!({"action":"logs-export"})),
+                true,
+            );
+            y += 50;
+            if let Some(report) = crate::diagnostics::status(&engine.paths)
+                .get("last_export")
+                .filter(|r| r["ok"] == true && r["pending"] != true)
+            {
+                if let Some(path) = report["directory"].as_str() {
+                    self.text(
+                        pix,
+                        &self.tr("export_complete"),
+                        0,
+                        y,
+                        12,
+                        self.theme.muted,
+                        w,
+                    );
+                    y += 26;
+                    self.button(
+                        pix,
+                        &self.tr("open_folder"),
+                        0,
+                        y,
+                        220.min(w),
+                        Action::OpenFolder(path.into()),
+                        false,
+                    );
+                    y += 50;
+                }
+            }
+        }
+        let open = self.fold(pix, "application", &self.tr("application"), 0, y, w);
+        y += 50;
+        if open {
+            self.button(
+                pix,
+                &self.tr("refresh"),
+                0,
+                y,
+                w / 2 - 4,
+                Action::Refresh,
+                false,
+            );
+            self.button(
+                pix,
+                &self.tr("quit_daemon"),
+                w / 2 + 4,
+                y,
+                w / 2 - 4,
+                Action::Command(json!({"action":"quit-daemon"})),
+                false,
+            );
+            y += 52;
+        }
+        y + 16
     }
 }
+fn no_count(template: &str, count: usize) -> String {
+    template.replace("{count}", &count.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn session() -> (tempfile::TempDir, Engine) {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths {
+            runtime_dir: root.path().join("run"),
+            config_dir: root.path().join("config"),
+            cache_dir: root.path().join("cache"),
+            data_dir: root.path().join("data"),
+            state_dir: root.path().join("state"),
+            gif_dir: root.path().join("gifs"),
+            gif_dir_explicit: true,
+        };
+        std::fs::create_dir(&paths.gif_dir).unwrap();
+        (root, Engine::new(paths).unwrap())
+    }
+    #[test]
+    fn directory_form_replaces_text_and_saves_with_keyboard() {
+        let (root, mut engine) = session();
+        let mut ui = Ui::new();
+        ui.tab = 3;
+        ui.windowed = true;
+        ui.activate(Action::Field("directory".into()), &mut engine);
+        let replacement = root.path().join("different folder 鳥");
+        std::fs::create_dir(&replacement).unwrap();
+        ui.text_input(replacement.to_str().unwrap(), &mut engine);
+        assert_eq!(ui.fields["directory"], replacement.to_string_lossy());
+        let _ = ui.draw(&engine, 900, 680, 1.0);
+        ui.focus_next(false, &mut engine);
+        assert!(matches!(
+            ui.keyboard_hit
+                .and_then(|i| ui.hits.get(i))
+                .map(|h| &h.action),
+            Some(Action::SaveDirectory)
+        ));
+        ui.submit(&mut engine);
+        assert!(ui.error.is_none(), "{:?}", ui.error);
+        assert_eq!(engine.paths.gif_dir, replacement);
+        ui.activate(Action::Tab(0), &mut engine);
+        ui.activate(Action::Field("search".into()), &mut engine);
+        ui.text_input("old query", &mut engine);
+        ui.select_text();
+        ui.text_input("new", &mut engine);
+        assert_eq!(ui.fields["search"], "new");
+    }
+    #[test]
+    fn narrow_scrolled_layouts_keep_create_and_rename_controls_reachable() {
+        let (_root, mut engine) = session();
+        for n in 0..40 {
+            engine.store.profiles[format!("Layout {n:02}")] = json!({"widgets":[]});
+        }
+        let mut ui = Ui::new();
+        ui.tab = 2;
+        ui.windowed = true;
+        ui.scroll = 350;
+        ui.sections.insert("rename:Layout 02".into());
+        let image = ui.draw(&engine, 640, 420, 1.5);
+        assert_eq!((image.width(), image.height()), (960, 630));
+        assert!(
+            ui.hits
+                .iter()
+                .any(|h| matches!(h.action, Action::SaveProfile))
+        );
+        let field = ui
+            .hits
+            .iter()
+            .find(|h| matches!(&h.action,Action::Field(key) if key=="rename"))
+            .unwrap();
+        let save = ui
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::SaveRename))
+            .unwrap();
+        assert_eq!(
+            field.rect.y, save.rect.y,
+            "rename field and save must share a row"
+        );
+        for hit in &ui.hits {
+            assert!(
+                hit.rect.x >= 0 && hit.rect.y >= 0 && hit.rect.w > 0 && hit.rect.h > 0,
+                "{:?}",
+                hit.rect
+            );
+            assert!(
+                hit.rect.x + hit.rect.w <= 640 && hit.rect.y + hit.rect.h <= 420,
+                "{:?}",
+                hit.rect
+            );
+        }
+    }
+    #[test]
+    fn many_instances_keep_the_narrow_selector_bounded() {
+        let (root, mut engine) = session();
+        let file = root.path().join("gifs/tiny.gif");
+        {
+            let mut encoder = gif::Encoder::new(
+                std::fs::File::create(&file).unwrap(),
+                1,
+                1,
+                &[0, 0, 0, 255, 0, 0],
+            )
+            .unwrap();
+            encoder
+                .write_frame(&gif::Frame {
+                    width: 1,
+                    height: 1,
+                    buffer: vec![1].into(),
+                    delay: 5,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        for n in 0..100 {
+            assert_eq!(
+                engine.dispatch(&json!({"action":"spawn","gif":file,"id":format!("gif-{n:03}")}))["ok"],
+                true
+            );
+        }
+        let mut ui = Ui::new();
+        ui.tab = 1;
+        ui.windowed = true;
+        ui.selected = Some("gif-000".into());
+        ui.sections.insert("selector".into());
+        let _ = ui.draw(&engine, 640, 420, 1.0);
+        let selections = ui
+            .hits
+            .iter()
+            .filter(|h| matches!(h.action, Action::Select(_)))
+            .count();
+        assert!(
+            selections <= 8,
+            "a small selector must not allocate rows for all instances"
+        );
+        ui.scroll = ui.scroll_max;
+        let _ = ui.draw(&engine, 640, 420, 1.0);
+        assert!(ui.hits.iter().all(|h| h.rect.y + h.rect.h <= 420));
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Theme {
     surface: Color,

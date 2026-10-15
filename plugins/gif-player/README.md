@@ -21,7 +21,7 @@ the service does not run an IPC subprocess on every update tick. Commands use
 argv-based `runAsync`, preserving spaces, quotes and Unicode in paths. Slider
 commands are coalesced. The bar alone does not start an empty playback daemon.
 
-Settings provide a logging-level button (info/debug/trace/off) and **Export logs**.
+Settings provide an expandable Diagnostics section with named logging levels and **Export logs**.
 Exports run asynchronously in the Rust engine; a native notification shows the
 completed folder or an error. The same operation is available through
 `gif-player logs export [NEW_DIRECTORY]`, including when the daemon has stopped.
@@ -32,3 +32,5 @@ The plugin is installed locally. No license is granted by its manifest;
 `LicenseRef-All-Rights-Reserved` avoids Noctalia's implicit MIT default.
 Community catalog publication requires the rights holder's license decision.
 See the preserved NOTICE.md and ../../docs/acceptance.md.
+
+Playback keeps the main actions visible and groups position, effects and advanced settings in expandable sections. Settings use explicit directory/layout Save controls, inline Rename and Delete confirmation. Collection changes propagate across frontends; images retain start/stop toggling and continuous scrolling. All controls remain genuine host ui.* components.

@@ -32,7 +32,7 @@ For desktop launchers, aliases, Fish completion and documentation: `cargo build 
 
 Requires Noctalia 5 with plugin API **30 or later** (tested with 5.2.1). `gif-player install-plugin` installs/enables the local plugin and adds its widget to an enabled bar, preserving the other widgets. It saves a backup of Noctalia's settings before editing them. With multiple bars, use `gif-player install-plugin --bar flying` to choose the target; `--no-bar` installs only the files. Widget placement remains editable through Noctalia's normal bar manager.
 
-The **picker**, **playback starter** and **settings** are separate native host panels. The picker is a continuous, virtualized gallery: click an image to start its GIF; click again to stop its instances. It has no per-tile Add/Stop buttons, pagination or global action toolbar. Active images have a theme-colored outline. The control panel holds per-GIF/global playback tools; the settings panel holds the compact restore switch, layouts and application/daemon actions.
+The **picker**, **playback starter** and **settings** are separate native host panels. The picker is a continuous, virtualized gallery: click an image to start its GIF; click again to stop its instances. It has no per-tile Add/Stop buttons, pagination or global action toolbar. Active images have a theme-colored outline. Playback puts Pause/Play, Edit/Done, visibility and Stop first. Position, motion effects and advanced tools expand when needed; global actions have their own section. Settings group collection/restoration, layouts, diagnostics and application tools. Directory and layout changes have explicit Save actions.
 
 ```sh
 gif-player picker
@@ -106,3 +106,9 @@ gif-player logs level info
 The settings panels and standalone app also provide **Logs** and **Export logs** buttons. Without a directory, export creates a timestamped report under `$XDG_STATE_HOME/gif-player/exports` (default `~/.local/state/gif-player/exports`) and returns its path. `gif-player logs path` prints the continuous log directory. Reports also work after a daemon crash without starting another daemon.
 
 Logs are asynchronous and rotate at 8 MiB per file (five files, approximately 40 MiB maximum). Trace mode intentionally records far more data and costs more CPU/disk bandwidth; use `info` for ordinary playback. Exports contain GIF paths and selected session details; unknown legacy/config fields and a full environment dump are excluded. See [diagnostic format, contents and troubleshooting](docs/diagnostics.md).
+
+## Clearer controls in 1.3
+
+The normal app adapts its gallery and playback controls to the available width. Both frontends show size/opacity as percentages and speed as a multiplier. **Done editing** locks the GIF and restores click-through. Empty views lead directly to GIF selection or collection settings. Native panels and the Rust app share the daemon state; changing the collection folder updates the other frontend too.
+
+In the Rust app, use Tab/Shift+Tab between controls, Enter or Space to activate a button, Ctrl+A to replace an input, Ctrl+F to search and Ctrl+W to close. Focused sliders accept Left/Right. The standalone labels use German for a German session locale and English otherwise. Read [the interaction guide](docs/usability.md).

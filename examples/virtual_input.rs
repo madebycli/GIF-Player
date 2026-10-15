@@ -74,10 +74,62 @@ fn main() -> anyhow::Result<()> {
                 keyboard.key(time, code, 1);
                 keyboard.key(time, code, 0);
             }
+            ["ctrl-a"] | ["ctrl-w"] => {
+                let code = if parts[0] == "ctrl-a" { 30 } else { 17 };
+                keyboard.modifiers(4, 0, 0, 0);
+                keyboard.key(time, code, 1);
+                keyboard.key(time, code, 0);
+                keyboard.modifiers(0, 0, 0, 0);
+            }
+            ["text", ..] => {
+                for ch in line.strip_prefix("text ").unwrap_or("").chars() {
+                    let lower = ch.to_ascii_lowercase();
+                    let code = match lower {
+                        'a' => 30,
+                        'b' => 48,
+                        'c' => 46,
+                        'd' => 32,
+                        'e' => 18,
+                        'f' => 33,
+                        'g' => 34,
+                        'h' => 35,
+                        'i' => 23,
+                        'j' => 36,
+                        'k' => 37,
+                        'l' => 38,
+                        'm' => 50,
+                        'n' => 49,
+                        'o' => 24,
+                        'p' => 25,
+                        'q' => 16,
+                        'r' => 19,
+                        's' => 31,
+                        't' => 20,
+                        'u' => 22,
+                        'v' => 47,
+                        'w' => 17,
+                        'x' => 45,
+                        'y' => 21,
+                        'z' => 44,
+                        '1'..='9' => 2 + (lower as u32 - '1' as u32),
+                        '0' => 11,
+                        ' ' => 57,
+                        '/' => 53,
+                        '.' => 52,
+                        '-' => 12,
+                        '_' => 12,
+                        _ => anyhow::bail!("Unsupported virtual input character: {ch}"),
+                    };
+                    keyboard.modifiers(u32::from(ch.is_ascii_uppercase() || ch == '_'), 0, 0, 0);
+                    keyboard.key(time, code, 1);
+                    keyboard.key(time, code, 0);
+                }
+                keyboard.modifiers(0, 0, 0, 0);
+            }
             ["quit"] => break,
             _ => {
                 eprintln!(
-                    "Commands: move X Y, click, down, up, scroll DELTA, key EVDEV_CODE, quit"
+                    "Commands: move X Y, click, down, up, scroll DELTA, key EVDEV_CODE, text TEXT, ctrl-a, quit"
                 );
                 continue;
             }

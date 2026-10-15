@@ -1,0 +1,24 @@
+{
+  "version": "1.3.0",
+  "date": "2026-10-15",
+  "native_host": "Noctalia 5.2.1, unmodified Nixpkgs package, Sway/Mesa software EGL",
+  "rust_tests": 19,
+  "real_wayland_checks": 16,
+  "verified": [
+    "minimal image-click gallery starts real GIF",
+    "native Play/Pause and Edit/Done buttons change actual daemon state",
+    "native layout Save creates a persisted layout",
+    "native collection Save changes the daemon directory",
+    "compact restore toggle changes persisted setting",
+    "Rust normal-window Ctrl+A/text/Tab/Enter saves a directory",
+    "native picker refreshes to the folder chosen in the Rust app",
+    "normal app inspected at 1280x900 and 720x480",
+    "English native panels and German standalone locale inspected",
+    "real xdg keyboard focus and Ctrl+W close pass in acceptance runner"
+  ],
+  "limits": [
+    "GPU-backed MangoWM not available",
+    "Other compositors and physical DPI/hotplug not exercised",
+    "No new CPU or power benchmark claim"
+  ]
+}

@@ -145,10 +145,10 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
             pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "800", "70"]))
             return 0 < pixel[0] < 40
         wait_for(ui_ready, "standalone surface first presentation")
-        input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 480) + " 140")
+        input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 480) + " 185")
         input_command("click")
         (artifacts / "standalone-state.json").write_text(json.dumps(request({"action":"snapshot"}),indent=2))
-        wait_for(lambda: request({"action": "status", "id": "test"})["paused"], "standalone UI pause")
+        wait_for(lambda: request({"action": "status", "id": "test"})["paused"], "standalone primary playback action")
         request({"action": "ui-close"})
         assert request({"action":"app"})["ok"]
         def app_is_tiled():
@@ -158,7 +158,18 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
                 return any(walk(child, floating) for child in node.get("nodes",[])) or any(walk(child,True) for child in node.get("floating_nodes",[]))
             return walk(tree)
         wait_for(app_is_tiled, "normal tiled xdg application window")
-        request({"action": "ui-close"})
+        subprocess.run(["swaymsg", '[app_id="gif-player-input-probe"] fullscreen disable'],env=env,check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(["swaymsg", '[app_id="io.github.madebycli.NoctaliaGifPlayer"] focus'],env=env,check=True,stdout=subprocess.DEVNULL)
+        time.sleep(0.1)
+        input_command("ctrl-w")
+        def app_is_closed():
+            tree=json.loads(subprocess.check_output(["swaymsg","-t","get_tree","-r"],env=env))
+            def contains(node):
+                return node.get("app_id")=="io.github.madebycli.NoctaliaGifPlayer" or any(contains(child) for child in node.get("nodes",[])+node.get("floating_nodes",[]))
+            return not contains(tree)
+        wait_for(app_is_closed,"real app keyboard shortcut")
+        subprocess.run(["swaymsg", '[app_id="gif-player-input-probe"] focus'],env=env,check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(["swaymsg", '[app_id="gif-player-input-probe"] fullscreen enable'],env=env,check=True,stdout=subprocess.DEVNULL)
         native = root / "native.gif"
         subprocess.run([str(examples / "generate_fixture"), str(native), "1024", "24"], check=True)
         assert request({"action":"spawn","gif":str(native),"id":"quality","state":{"x":400,"y":100,"scale":1,"output":"HEADLESS-1","paused":True,"locked":False}})["ok"]
@@ -175,9 +186,12 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
             driver.stdin.flush()
             assert driver.stdout.readline().strip().startswith("done ")
             picture = artifacts / "native-drag.png"
-            subprocess.run(["grim", "-o", "HEADLESS-1", str(picture)], env=env, check=True)
-            pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), str(400 + dx + 509), "120"]))
-            assert pixel == [22,24,40,255], pixel
+            def drag_is_presented():
+                # The virtual input roundtrip acknowledges submission, not presentation.
+                subprocess.run(["grim", "-o", "HEADLESS-1", str(picture)], env=env, check=True)
+                pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), str(400 + dx + 509), "120"]))
+                return pixel == [22,24,40,255] and request({"action":"status","id":"quality"})["base_position"] == [400 + dx,100]
+            wait_for(drag_is_presented, "drag position and rendered leading pixel")
             trailing = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "405", "140"]))
             assert trailing == [36,96,160,255], ("stale previous buffer left a trail", trailing)
             position = request({"action":"status","id":"quality"})["base_position"]
@@ -195,8 +209,8 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
             assert any(record.get("event") == event for record in records), f"missing real diagnostic event: {event}"
         assert (artifacts / "diagnostics/snapshot.json").exists()
         request({"action": "quit-daemon"})
-        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "native resolution under cache pressure", "unsnapped visual drag", "output removal", "asynchronous diagnostic trace export"]}, indent=2))
-        print("15 real Wayland acceptance checks passed")
+        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "normal app keyboard focus and shortcut", "native resolution under cache pressure", "unsnapped visual drag", "output removal", "asynchronous diagnostic trace export"]}, indent=2))
+        print("16 real Wayland acceptance checks passed")
     finally:
         for child in reversed(children):
             if child.poll() is None:

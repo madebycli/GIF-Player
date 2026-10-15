@@ -16,7 +16,7 @@ gif-player logs level info
 
 The target must not exist; existing reports are never overwritten. Paths with spaces and Unicode work. Omit the target to create a timestamped folder and get its absolute path in the JSON response. The standalone app and native Noctalia settings provide logging-level and export buttons; the Noctalia notification and app footer show the result path.
 
-Live level changes are persisted in settings.json. Available levels are off, error, warn, info (default), debug and trace. The UI cycles info → debug → trace → off. To diagnose startup before IPC is available:
+Live level changes are persisted in settings.json. Available levels are off, error, warn, info (default), debug and trace. The UI offers named choices for every level; there is no hidden cycling order. Diagnostics are grouped in an expandable settings section. To diagnose startup before IPC is available:
 
 ```sh
 GIF_PLAYER_LOG=trace gif-player daemon --stay

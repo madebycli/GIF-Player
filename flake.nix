@@ -12,7 +12,7 @@
       in {
         inherit gif-player;
         default = gif-player;
-        noctalia-plugin = pkgs.runCommand "noctalia-gif-player-plugin-1.2.0" {} ''
+        noctalia-plugin = pkgs.runCommand "noctalia-gif-player-plugin-1.3.0" {} ''
           mkdir -p "$out"
           cp -r ${./plugins/gif-player}/. "$out/"
           cp ${./NOTICE.md} "$out/NOTICE.md"

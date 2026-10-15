@@ -13,6 +13,7 @@
     "fractional scale",
     "standalone UI interaction",
     "normal tiled application window",
+    "normal app keyboard focus and shortcut",
     "native resolution under cache pressure",
     "unsnapped visual drag",
     "output removal",

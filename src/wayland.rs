@@ -879,7 +879,7 @@ impl State {
             return;
         }
         if event.keysym == Keysym::Escape {
-            self.ui.open = false;
+            self.ui.escape();
         } else if event.keysym == Keysym::BackSpace {
             self.ui.backspace();
         } else if event.keysym == Keysym::Return || event.keysym == Keysym::KP_Enter {
@@ -894,29 +894,23 @@ impl State {
             self.ui.focus = Some("search".into());
             self.ui.tab = 0;
             self.ui.dirty = true;
-        } else if event.keysym == Keysym::Tab {
-            let keys = self
-                .ui
-                .hits
-                .iter()
-                .filter_map(|h| {
-                    if let crate::ui::Action::Field(key) = &h.action {
-                        Some(key.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            if !keys.is_empty() {
-                let current = self
-                    .ui
-                    .focus
-                    .as_ref()
-                    .and_then(|key| keys.iter().position(|k| k == key))
-                    .map_or(0, |n| (n + 1) % keys.len());
-                self.ui.focus = Some(keys[current].clone());
-                self.ui.dirty = true;
-            }
+        } else if self.modifiers.ctrl && matches!(event.keysym, Keysym::a | Keysym::A) {
+            self.ui.select_text();
+        } else if self.modifiers.ctrl && matches!(event.keysym, Keysym::w | Keysym::W) {
+            self.ui.open = false;
+        } else if event.keysym == Keysym::Tab || event.keysym == Keysym::ISO_Left_Tab {
+            self.ui.focus_next(self.modifiers.shift, &mut self.engine);
+        } else if event.keysym == Keysym::space && self.ui.focus.is_none() {
+            self.ui.submit(&mut self.engine);
+        } else if matches!(event.keysym, Keysym::Left | Keysym::Right) && self.ui.focus.is_none() {
+            self.ui.adjust_focused_slider(
+                if event.keysym == Keysym::Left {
+                    -1.0
+                } else {
+                    1.0
+                },
+                &mut self.engine,
+            );
         } else if !self.modifiers.ctrl && !self.modifiers.alt {
             if let Some(text) = event.utf8 {
                 self.ui.text_input(&text, &mut self.engine);
@@ -1331,8 +1325,14 @@ impl KeyboardHandler for State {
     ) {
         self.ui_focus = self
             .surfaces
-            .get("ui")
-            .is_some_and(|s| s.layer.wl_surface() == surface);
+            .values()
+            .any(|s| s.spec.ui && s.layer.wl_surface() == surface);
+        crate::diag!(
+            Debug,
+            "input",
+            "ui_keyboard_focus",
+            json!({"focused":self.ui_focus})
+        );
     }
     fn leave(
         &mut self,

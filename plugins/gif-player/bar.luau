@@ -5,11 +5,12 @@ local function render()
     local connected = noctalia.state.get("connected") == true
     local widgets = connected and (state.widgets or {}) or {}
     local playing = false
-    for _, widget in ipairs(widgets) do if not widget.paused then playing = true end end
-    local nodes = {ui.glyph({name = playing and "movie" or "player-pause", size = 18})}
+    local visible = false
+    for _, widget in ipairs(widgets) do if widget.visible then visible = true; if not widget.paused then playing = true end end end
+    local nodes = {ui.glyph({name = not connected and "plug-off" or #widgets == 0 and "photo" or not visible and "eye-off" or playing and "movie" or "player-pause", size = 18})}
     if #widgets > 0 then table.insert(nodes, ui.label({text = tostring(#widgets), fontSize = 11, color = "primary"})) end
     barWidget.render(ui.row({gap = 3, align = "center"}, nodes))
-    barWidget.setTooltip(noctalia.tr("title") .. " · " .. noctalia.trp("active", #widgets))
+    barWidget.setTooltip(noctalia.tr("title") .. " · " .. noctalia.trp("active", #widgets) .. "\n" .. noctalia.tr("bar_hint"))
 end
 noctalia.state.watch("snapshot", render)
 noctalia.state.watch("connected", render)
