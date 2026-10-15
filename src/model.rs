@@ -367,7 +367,7 @@ impl Engine {
         let available = (decode::CACHE_LIMIT - 16 * 1024 * 1024).saturating_sub(used);
         ensure!(
             available >= 1024 * 1024,
-            "Decoded GIF cache budget exhausted; stop widgets or reduce the collection preview page"
+            "Decoded GIF cache budget exhausted; stop a running GIF or close the picker and try again"
         );
         let native = decode::native_dimensions(&path)?;
         let required = native.0 as usize * native.1 as usize * 4 + 1024 * 1024;

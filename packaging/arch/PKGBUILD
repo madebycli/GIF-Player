@@ -1,5 +1,5 @@
 pkgname=noctalia-gif-player
-pkgver=1.3.0
+pkgver=1.4.0
 pkgrel=1
 pkgdesc='Native Rust Wayland GIF overlays with optional native Noctalia 5 controls'
 arch=('x86_64' 'aarch64')

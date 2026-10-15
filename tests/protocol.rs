@@ -398,3 +398,61 @@ fn detailed_logs_export_live_and_after_shutdown() {
     .unwrap();
     assert_eq!(settings["log_level"], "trace");
 }
+
+fn isolated(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_gif-player"))
+        .args(args)
+        .env("HOME", root)
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("LANG", "en_US.UTF-8")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap()
+}
+#[test]
+fn command_help_never_runs_the_command_and_typos_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("runtime")).unwrap();
+    fs::set_permissions(
+        root.path().join("runtime"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    for command in ["install-plugin", "daemon", "picker", "app", "doctor", "run"] {
+        let output = isolated(root.path(), &[command, "--help"]);
+        assert!(output.status.success(), "{command} --help: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: gif-player"));
+    }
+    assert!(
+        !root.path().join("data/noctalia").exists(),
+        "--help must not install the plugin"
+    );
+    assert!(
+        !root.path().join("runtime/gif-player/daemon.sock").exists(),
+        "--help must not start a daemon"
+    );
+    let output = isolated(root.path(), &["install-plugin", "--hlep"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown option --hlep"));
+    assert!(
+        !root.path().join("data/noctalia").exists(),
+        "a typo must not install anything"
+    );
+    let output = isolated(root.path(), &["daemon", "--headles"]);
+    assert!(
+        !output.status.success(),
+        "a misspelled daemon flag must not start a daemon"
+    );
+    let output = isolated(root.path(), &["install-plugin", "--bar"]);
+    assert!(!output.status.success());
+    let dest = root.path().join("plugin copy");
+    let output = isolated(
+        root.path(),
+        &["install-plugin", dest.to_str().unwrap(), "--no-bar"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(dest.join("plugin.toml").exists());
+}

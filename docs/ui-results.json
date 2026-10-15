@@ -1,24 +1,37 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "date": "2026-10-15",
-  "native_host": "Noctalia 5.2.1, unmodified Nixpkgs package, Sway/Mesa software EGL",
-  "rust_tests": 19,
-  "real_wayland_checks": 16,
+  "native_host": "Noctalia 5.2.1, unmodified Nixpkgs package, Sway 1.9 headless/pixman, Mesa software EGL",
+  "rust_tests": 38,
+  "real_wayland_checks": 20,
   "verified": [
-    "minimal image-click gallery starts real GIF",
-    "native Play/Pause and Edit/Done buttons change actual daemon state",
-    "native layout Save creates a persisted layout",
-    "native collection Save changes the daemon directory",
-    "compact restore toggle changes persisted setting",
-    "Rust normal-window Ctrl+A/text/Tab/Enter saves a directory",
-    "native picker refreshes to the folder chosen in the Rust app",
-    "normal app inspected at 1280x900 and 720x480",
-    "English native panels and German standalone locale inspected",
-    "real xdg keyboard focus and Ctrl+W close pass in acceptance runner"
+    "native picker opens through noctalia msg; three real pointer clicks on native tiles start three GIFs in the real daemon",
+    "native control panel opens in the real host",
+    "daemon receives all fourteen Noctalia colour roles from the host",
+    "run-time Noctalia colour-scheme change (Noctalia default to Dracula) reaches the daemon and the normal Rust window",
+    "Rust window inspected at 1280x720 and 1600x900 (real host theme), 720x480 (light palette, German locale) and as a rounded floating panel",
+    "typed search, Enter, held Backspace key repeat and clipboard paste/copy in the real xdg window (Sway, wl-clipboard)",
+    "pointer press/release, slider drag with snapping, scrollbar drag, caret/selection/word editing, Tab/arrow navigation and scroll-into-view in unit tests",
+    "official plugin lint 0 errors 0 warnings; nix flake check passes on x86_64",
+    "daemon stays idle after the application window closes while the pointer rests on a tile (CPU < 0.25 s in 1.5 s)"
   ],
+  "performance": {
+    "scenario": "collection page, 60 scroll redraws, pointer parked on empty space, 1280x720, software-rendered Sway sandbox, release builds",
+    "version_1_3_0": {
+      "median_redraw_ms": 21.64,
+      "p90_redraw_ms": 30.16
+    },
+    "version_1_4_0": {
+      "median_redraw_ms": 15.09,
+      "p90_redraw_ms": 22.57
+    },
+    "idle_open_window_redraws_in_5s": 0,
+    "note": "Render time as logged by the daemon (render_us of frame_committed). Not an energy, GPU or Mango measurement."
+  },
   "limits": [
     "GPU-backed MangoWM not available",
     "Other compositors and physical DPI/hotplug not exercised",
-    "No new CPU or power benchmark claim"
+    "Native Noctalia panels were not redesigned; only the colour forwarding of the plugin service changed",
+    "The unreadable-subfolder test is skipped when run as root"
   ]
 }

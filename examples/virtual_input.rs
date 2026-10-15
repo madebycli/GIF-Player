@@ -74,8 +74,16 @@ fn main() -> anyhow::Result<()> {
                 keyboard.key(time, code, 1);
                 keyboard.key(time, code, 0);
             }
-            ["ctrl-a"] | ["ctrl-w"] => {
-                let code = if parts[0] == "ctrl-a" { 30 } else { 17 };
+            ["keydown", code] => keyboard.key(time, code.parse()?, 1),
+            ["keyup", code] => keyboard.key(time, code.parse()?, 0),
+            ["ctrl-a"] | ["ctrl-w"] | ["ctrl-c"] | ["ctrl-v"] | ["ctrl-f"] => {
+                let code = match parts[0] {
+                    "ctrl-a" => 30,
+                    "ctrl-c" => 46,
+                    "ctrl-v" => 47,
+                    "ctrl-f" => 33,
+                    _ => 17,
+                };
                 keyboard.modifiers(4, 0, 0, 0);
                 keyboard.key(time, code, 1);
                 keyboard.key(time, code, 0);
@@ -129,7 +137,7 @@ fn main() -> anyhow::Result<()> {
             ["quit"] => break,
             _ => {
                 eprintln!(
-                    "Commands: move X Y, click, down, up, scroll DELTA, key EVDEV_CODE, text TEXT, ctrl-a, quit"
+                    "Commands: move X Y, click, down, up, scroll DELTA, key|keydown|keyup EVDEV_CODE, text TEXT, ctrl-a|c|f|v|w, quit"
                 );
                 continue;
             }

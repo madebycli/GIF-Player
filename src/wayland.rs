@@ -8,6 +8,12 @@ use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
+    data_device_manager::{
+        DataDeviceManagerState, WritePipe,
+        data_device::{DataDevice, DataDeviceHandler},
+        data_offer::{DataOfferHandler, DragOffer},
+        data_source::{CopyPasteSource, DataSourceHandler},
+    },
     delegate_registry,
     dispatch2::Dispatch2,
     output::{OutputHandler, OutputState},
@@ -15,7 +21,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers, RepeatInfo},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -36,15 +42,19 @@ use smithay_client_toolkit::{
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    io::Read,
+    io::{Read, Write},
     os::fd::{AsFd, AsRawFd},
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use wayland_client::{
     Connection, EventQueue, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+    protocol::{
+        wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
+        wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm,
+        wl_surface,
+    },
 };
 use wayland_protocols::wp::{
     fractional_scale::v1::client::{
@@ -178,6 +188,19 @@ pub struct State {
     modifiers: Modifiers,
     output_dirty: bool,
     last_click: Option<(String, u32)>,
+    connection: Connection,
+    qh: QueueHandle<State>,
+    data_manager: Option<DataDeviceManagerState>,
+    data_devices: HashMap<wl_seat::WlSeat, DataDevice>,
+    clipboard_text: String,
+    clipboard_source: Option<CopyPasteSource>,
+    serial: u32,
+    repeat_info: Option<(Duration, Duration)>,
+    repeat: Option<Repeat>,
+}
+struct Repeat {
+    event: KeyEvent,
+    next: Instant,
 }
 fn layer(name: &str) -> Layer {
     match name {
@@ -232,6 +255,15 @@ pub fn connect(engine: Engine) -> Result<(Connection, EventQueue<State>, State)>
         modifiers: Modifiers::default(),
         output_dirty: true,
         last_click: None,
+        connection: connection.clone(),
+        qh: qh.clone(),
+        data_manager: DataDeviceManagerState::bind(&globals, &qh).ok(),
+        data_devices: HashMap::new(),
+        clipboard_text: String::new(),
+        clipboard_source: None,
+        serial: 0,
+        repeat_info: Some((Duration::from_millis(400), Duration::from_millis(40))),
+        repeat: None,
     };
     Ok((connection, queue, state))
 }
@@ -296,6 +328,7 @@ pub fn run(mut engine: Engine, stay: bool, restore: bool, headless: bool) -> Res
         if state.output_dirty {
             state.refresh_outputs();
         }
+        state.run_repeat();
         state.engine.tick();
         ever_active |= !state.engine.widgets.is_empty();
         server.service(&mut state.engine);
@@ -352,6 +385,10 @@ pub fn run(mut engine: Engine, stay: bool, restore: bool, headless: bool) -> Res
                 );
                 timeout = Some(timeout.map_or(empty, |t| t.min(empty)));
             }
+        }
+        if let Some(repeat) = &state.repeat {
+            let due = repeat.next.saturating_duration_since(Instant::now());
+            timeout = Some(timeout.map_or(due, |t| t.min(due)));
         }
         if let Some(animation) = state.ui.preview_deadline(&state.engine) {
             timeout = Some(timeout.map_or(animation, |t| t.min(animation)));
@@ -878,45 +915,233 @@ impl State {
         if !self.ui_focus || !self.ui.open {
             return;
         }
-        if event.keysym == Keysym::Escape {
-            self.ui.escape();
-        } else if event.keysym == Keysym::BackSpace {
-            self.ui.backspace();
-        } else if event.keysym == Keysym::Return || event.keysym == Keysym::KP_Enter {
-            self.ui.submit(&mut self.engine);
-        } else if event.keysym == Keysym::Page_Down {
-            self.ui
-                .activate(crate::ui::Action::Page(1), &mut self.engine);
-        } else if event.keysym == Keysym::Page_Up {
-            self.ui
-                .activate(crate::ui::Action::Page(-1), &mut self.engine);
-        } else if self.modifiers.ctrl && (event.keysym == Keysym::f || event.keysym == Keysym::F) {
-            self.ui.focus = Some("search".into());
-            self.ui.tab = 0;
-            self.ui.dirty = true;
-        } else if self.modifiers.ctrl && matches!(event.keysym, Keysym::a | Keysym::A) {
-            self.ui.select_text();
-        } else if self.modifiers.ctrl && matches!(event.keysym, Keysym::w | Keysym::W) {
-            self.ui.open = false;
-        } else if event.keysym == Keysym::Tab || event.keysym == Keysym::ISO_Left_Tab {
-            self.ui.focus_next(self.modifiers.shift, &mut self.engine);
-        } else if event.keysym == Keysym::space && self.ui.focus.is_none() {
-            self.ui.submit(&mut self.engine);
-        } else if matches!(event.keysym, Keysym::Left | Keysym::Right) && self.ui.focus.is_none() {
-            self.ui.adjust_focused_slider(
-                if event.keysym == Keysym::Left {
-                    -1.0
-                } else {
-                    1.0
-                },
-                &mut self.engine,
-            );
-        } else if !self.modifiers.ctrl && !self.modifiers.alt {
+        let mods = crate::ui::Mods {
+            ctrl: self.modifiers.ctrl,
+            shift: self.modifiers.shift,
+            alt: self.modifiers.alt,
+        };
+        let special = match event.keysym {
+            Keysym::Escape => Some(crate::ui::Key::Escape),
+            Keysym::Return | Keysym::KP_Enter => Some(crate::ui::Key::Enter),
+            Keysym::Tab => Some(crate::ui::Key::Tab),
+            Keysym::ISO_Left_Tab => Some(crate::ui::Key::BackTab),
+            Keysym::BackSpace => Some(crate::ui::Key::Backspace),
+            Keysym::Delete | Keysym::KP_Delete => Some(crate::ui::Key::Delete),
+            Keysym::Left | Keysym::KP_Left => Some(crate::ui::Key::Left),
+            Keysym::Right | Keysym::KP_Right => Some(crate::ui::Key::Right),
+            Keysym::Up | Keysym::KP_Up => Some(crate::ui::Key::Up),
+            Keysym::Down | Keysym::KP_Down => Some(crate::ui::Key::Down),
+            Keysym::Home | Keysym::KP_Home => Some(crate::ui::Key::Home),
+            Keysym::End | Keysym::KP_End => Some(crate::ui::Key::End),
+            Keysym::Page_Up | Keysym::KP_Page_Up => Some(crate::ui::Key::PageUp),
+            Keysym::Page_Down | Keysym::KP_Page_Down => Some(crate::ui::Key::PageDown),
+            Keysym::space if self.ui.focus.is_none() => Some(crate::ui::Key::Space),
+            _ => None,
+        };
+        if let Some(key) = special {
+            self.ui.key(key, mods, &mut self.engine);
+        } else if mods.ctrl && !mods.alt {
+            let letter = event
+                .keysym
+                .key_char()
+                .map(|c| c.to_ascii_lowercase())
+                .unwrap_or_default();
+            match letter {
+                'v' => self.paste_clipboard(),
+                'c' => self.copy_to_clipboard(false),
+                'x' => self.copy_to_clipboard(true),
+                _ => {
+                    self.ui.shortcut(letter, mods, &mut self.engine);
+                }
+            }
+        } else if !mods.alt {
             if let Some(text) = event.utf8 {
                 self.ui.text_input(&text, &mut self.engine);
             }
         }
     }
+    /// Insert the Wayland clipboard text into the focused field.
+    fn paste_clipboard(&mut self) {
+        let text = if self.clipboard_source.is_some() {
+            Some(self.clipboard_text.clone())
+        } else {
+            self.read_selection()
+        };
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.ui.paste(&text, &mut self.engine);
+        }
+    }
+    fn read_selection(&mut self) -> Option<String> {
+        let offer = self
+            .data_devices
+            .values()
+            .find_map(|d| d.data().selection_offer())?;
+        let mime = offer.with_mime_types(|types| {
+            [
+                "text/plain;charset=utf-8",
+                "UTF8_STRING",
+                "text/plain",
+                "STRING",
+                "TEXT",
+            ]
+            .iter()
+            .find(|wanted| types.iter().any(|t| t == **wanted))
+            .map(|m| m.to_string())
+        })?;
+        let mut pipe = offer.receive(mime).ok()?;
+        self.connection.flush().ok()?;
+        // The owner writes the text right after our request; never wait on it indefinitely.
+        let deadline = Instant::now() + Duration::from_millis(400);
+        let mut data = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || data.len() > 64 * 1024 {
+                break;
+            }
+            let mut fd = libc::pollfd {
+                fd: pipe.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut fd, 1, left.as_millis() as i32) };
+            if ready <= 0 {
+                break;
+            }
+            let mut chunk = [0u8; 4096];
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => data.extend_from_slice(&chunk[..n]),
+            }
+        }
+        String::from_utf8(data).ok()
+    }
+    fn copy_to_clipboard(&mut self, cut: bool) {
+        let text = if cut {
+            self.ui.cut_selection()
+        } else {
+            self.ui.selected_text()
+        };
+        let (Some(text), Some(manager)) = (text, &self.data_manager) else {
+            return;
+        };
+        let Some(device) = self.data_devices.values().next() else {
+            return;
+        };
+        let source = manager.create_copy_paste_source(
+            &self.qh,
+            ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"],
+        );
+        source.set_selection(device, self.serial);
+        self.clipboard_text = text;
+        self.clipboard_source = Some(source);
+    }
+    fn repeatable(&self, event: &KeyEvent) -> bool {
+        matches!(
+            event.keysym,
+            Keysym::BackSpace
+                | Keysym::Delete
+                | Keysym::Left
+                | Keysym::Right
+                | Keysym::Up
+                | Keysym::Down
+                | Keysym::Home
+                | Keysym::End
+                | Keysym::Page_Up
+                | Keysym::Page_Down
+        ) || (event
+            .utf8
+            .as_ref()
+            .is_some_and(|t| !t.trim().is_empty() || self.ui.focus.is_some())
+            && !self.modifiers.ctrl
+            && !self.modifiers.alt
+            && !matches!(
+                event.keysym,
+                Keysym::Return | Keysym::KP_Enter | Keysym::Escape | Keysym::Tab
+            ))
+    }
+    /// Repeat the held key while the interface has keyboard focus (the compositor only sends
+    /// repeat parameters; each client repeats on its own).
+    fn run_repeat(&mut self) {
+        let Some((_, interval)) = self.repeat_info else {
+            self.repeat = None;
+            return;
+        };
+        if !self.ui.open || !self.ui_focus {
+            self.repeat = None;
+            return;
+        }
+        let now = Instant::now();
+        let mut fired = 0;
+        while let Some(repeat) = self.repeat.as_mut().filter(|r| r.next <= now && fired < 30) {
+            let event = repeat.event.clone();
+            repeat.next += interval;
+            fired += 1;
+            self.key(event);
+        }
+        if let Some(repeat) = self.repeat.as_mut().filter(|r| r.next <= now) {
+            repeat.next = now + interval;
+        }
+    }
+}
+impl DataDeviceHandler for State {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &WlDataDevice,
+        _: f64,
+        _: f64,
+        _: &wl_surface::WlSurface,
+    ) {
+    }
+    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
+    fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+}
+impl DataOfferHandler for State {
+    fn source_actions(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &mut DragOffer,
+        _: DndAction,
+    ) {
+    }
+    fn selected_action(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &mut DragOffer,
+        _: DndAction,
+    ) {
+    }
+}
+impl DataSourceHandler for State {
+    fn accept_mime(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &WlDataSource,
+        _: Option<String>,
+    ) {
+    }
+    fn send_request(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &WlDataSource,
+        _: String,
+        mut fd: WritePipe,
+    ) {
+        let _ = fd.write_all(self.clipboard_text.as_bytes());
+    }
+    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {
+        self.clipboard_source = None;
+    }
+    fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
+    fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
+    fn action(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: DndAction) {}
 }
 impl CompositorHandler for State {
     fn scale_factor_changed(
@@ -1123,6 +1348,12 @@ impl SeatHandler for State {
                 }
             }
             Capability::Keyboard => {
+                if let (Some(manager), false) =
+                    (&self.data_manager, self.data_devices.contains_key(&seat))
+                {
+                    self.data_devices
+                        .insert(seat.clone(), manager.get_data_device(qh, &seat));
+                }
                 if let Ok(keyboard) = self.seat.get_keyboard(qh, &seat, None) {
                     self.keyboards.insert(seat, keyboard);
                 }
@@ -1189,17 +1420,15 @@ impl PointerHandler for State {
             if spec.ui {
                 match event.kind {
                     PointerEventKind::Press { button: 0x110, .. } => {
-                        self.ui.click(x, y, &mut self.engine)
+                        self.ui.press(x, y, &mut self.engine)
                     }
-                    PointerEventKind::Release { .. } => self.ui.active_slider = None,
+                    PointerEventKind::Release { button: 0x110, .. } => {
+                        self.ui.release(x, y, &mut self.engine)
+                    }
                     PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } => {
-                        self.ui.motion(x, y);
-                        self.ui.slider(x, &mut self.engine);
+                        self.ui.motion(x, y, &mut self.engine);
                     }
-                    PointerEventKind::Leave { .. } => {
-                        self.ui.hovered = None;
-                        self.ui.dirty = true;
-                    }
+                    PointerEventKind::Leave { .. } => self.ui.pointer_left(),
                     PointerEventKind::Axis { vertical, .. }
                         if vertical.absolute != 0.0 || vertical.discrete != 0 =>
                     {
@@ -1327,6 +1556,9 @@ impl KeyboardHandler for State {
             .surfaces
             .values()
             .any(|s| s.spec.ui && s.layer.wl_surface() == surface);
+        if self.ui_focus {
+            self.ui.focus_gained(&self.engine);
+        }
         crate::diag!(
             Debug,
             "input",
@@ -1343,15 +1575,26 @@ impl KeyboardHandler for State {
         _: u32,
     ) {
         self.ui_focus = false;
+        self.repeat = None;
     }
     fn press_key(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: u32,
+        serial: u32,
         event: KeyEvent,
     ) {
+        self.serial = serial;
+        self.repeat = None;
+        if self.ui_focus && self.ui.open && self.repeatable(&event) {
+            if let Some((delay, _)) = self.repeat_info {
+                self.repeat = Some(Repeat {
+                    event: event.clone(),
+                    next: Instant::now() + delay,
+                });
+            }
+        }
         self.key(event);
     }
     fn repeat_key(
@@ -1369,9 +1612,32 @@ impl KeyboardHandler for State {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: u32,
-        _: KeyEvent,
+        serial: u32,
+        event: KeyEvent,
     ) {
+        self.serial = serial;
+        if self
+            .repeat
+            .as_ref()
+            .is_some_and(|r| r.event.raw_code == event.raw_code)
+        {
+            self.repeat = None;
+        }
+    }
+    fn update_repeat_info(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        info: RepeatInfo,
+    ) {
+        self.repeat_info = match info {
+            RepeatInfo::Disable => None,
+            RepeatInfo::Repeat { rate, delay } => Some((
+                Duration::from_millis(delay as u64),
+                Duration::from_micros(1_000_000 / rate.get() as u64),
+            )),
+        };
     }
     fn update_modifiers(
         &mut self,

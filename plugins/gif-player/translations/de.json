@@ -137,5 +137,13 @@
   "edit_hint_short": "Ziehen · Scrollen für Größe · Fertig zum Sperren",
   "disconnected": "Player ist beendet",
   "reconnect_hint": "Starte den Player, um deine GIF-Sammlung wieder zu verwenden.",
-  "bar_hint": "Klick: Wiedergabe · Rechtsklick: Sammlung"
+  "bar_hint": "Klick: Wiedergabe · Rechtsklick: Sammlung",
+  "layout_count.one": "{count} GIF",
+  "layout_count.other": "{count} GIFs",
+  "collection_count_n": "{count} GIFs in deiner Sammlung",
+  "layer_short_overlay": "Overlay",
+  "layer_short_top": "Oben",
+  "layer_short_bottom": "Unten",
+  "layer_short_background": "Hintergrund",
+  "no_layouts_hint": "Ordne deine GIFs an, gib oben einen Namen ein und wähle Speichern."
 }

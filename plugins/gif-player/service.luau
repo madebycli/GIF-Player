@@ -91,7 +91,8 @@ local function start()
 end
 local function appearance()
     local palette = {}
-    for _, role in ipairs({"surface", "surface_variant", "on_surface", "on_surface_variant", "primary", "on_primary", "hover", "outline"}) do palette[role] = noctalia.getColor(role) end
+    -- Every role the standalone UI draws with, so it matches native components (hover/on_hover, focus ring, destructive).
+    for _, role in ipairs({"surface", "surface_variant", "on_surface", "on_surface_variant", "primary", "on_primary", "secondary", "on_secondary", "error", "on_error", "outline", "shadow", "hover", "on_hover"}) do palette[role] = noctalia.getColor(role) end
     local shell = noctalia.getSetting("shell") or {}
     local value = {action = "appearance", palette = palette, font_family = shell.font_family or "sans-serif"}
     local encoded = noctalia.json.encode(value)

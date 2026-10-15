@@ -41,7 +41,7 @@ gif-player settings
 gif-player app
 ```
 
-`app` opens a **normal xdg-shell application window** with sidebar navigation, all four pages and compositor-managed resizing/tiling. It does not request a floating layer-shell role. Its colors and font follow the current Noctalia host through the plugin's generic appearance IPC; changes are applied live. The last appearance is retained for use without Noctalia. Standalone controls remain Rust and do not require the host. `--standalone` explicitly selects the Rust picker/control/settings frontend.
+`app` opens a **normal xdg-shell application window** with sidebar navigation, all four pages and compositor-managed resizing/tiling. It does not request a floating layer-shell role. It is drawn with Noctalia 5's own control sizes, radii, outlines, focus ring and states, and its colors (all fourteen roles) and font follow the current Noctalia host through the plugin's generic appearance IPC; changes are applied live. The last appearance is retained for use without Noctalia. Standalone controls remain Rust and do not require the host. `--standalone` explicitly selects the Rust picker/control/settings frontend.
 
 All Noctalia panels use host `ui.*` components, typography, color roles and transitions. Left click on the bar widget opens playback controls, right click opens the picker; settings are available through the small gear action. The bar remains visible with zero active GIFs, including on vertical bars. See [plugin documentation](plugins/gif-player/README.md).
 
@@ -82,7 +82,7 @@ The default session restore setting is enabled. `gif-player daemon --stay` runs 
 
 ## Verification and performance
 
-On an unmodified headless Sway session, the automated suite verifies fullscreen overlay pixels, click-through, keyboard/scroll pass-through, edit-region isolation, dragging, offscreen positioning, two outputs, fractional scale, native-resolution cache pressure, trailing-buffer cleanup, normal application-window mapping and output removal. The real Noctalia 5.2.1 host has also loaded the native service, bar, picker and control panel. Cargo checks and Nix checks run in CI.
+On an unmodified headless Sway session, the automated suite verifies fullscreen overlay pixels, click-through, keyboard/scroll pass-through, edit-region isolation, dragging, offscreen positioning, two outputs, fractional scale, native-resolution cache pressure, trailing-buffer cleanup, normal application-window mapping, typed search with Enter, key repeat, clipboard paste/copy and output removal. The real Noctalia 5.2.1 host has also loaded the native service, bar, picker and control panel. Cargo checks and Nix checks run in CI.
 
 The historical 1.0.0 60-second comparison of three 512×512 GIFs at 20 FPS on the same Sway setup measured **4.48% CPU / 82.4 MiB RSS** for Rust versus **27.18% CPU / 129.4 MiB peak RSS** for the preserved Python version. Paused Rust playback measured 0% CPU; after stopping all GIFs, RSS fell to 4.6 MiB. Those historical measurements apply to the 1.0.0 workload; they are not a performance claim for the new native-resolution/lossless backing and bilinear renderer.
 

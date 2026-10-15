@@ -1,6 +1,6 @@
 id = "madebycli/gif-player"
 name = "Noctalia GIF Player"
-version = "1.3.0"
+version = "1.4.0"
 plugin_api = 30
 author = "madebycli"
 license = "LicenseRef-All-Rights-Reserved"

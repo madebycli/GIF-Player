@@ -1,7 +1,7 @@
 { lib, rustPlatform, pkg-config, libxkbcommon, dejavu_fonts }:
 rustPlatform.buildRustPackage {
   pname = "noctalia-gif-player";
-  version = "1.3.0";
+  version = "1.4.0";
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;
   nativeBuildInputs = [ pkg-config ];

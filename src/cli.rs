@@ -83,10 +83,36 @@ pub fn parse() -> Result<Args> {
             }
         }
     }
+    // `gif-player COMMAND --help` must describe the command, never run it (starting a daemon,
+    // opening a panel or changing Noctalia's settings).
+    if input.len() > 1
+        && known.contains(&input[0].as_str())
+        && matches!(input[1].as_str(), "--help" | "-h")
+    {
+        input = vec!["--help".into()];
+    }
     Ok(Args {
         paths: Paths::new(gif_dir.as_deref()),
         args: input,
     })
+}
+/// Reject misspelled options instead of silently ignoring them and still acting.
+pub fn check_flags(args: &[String], allowed: &[&str], valued: &[&str]) -> Result<()> {
+    let mut i = 1;
+    while i < args.len() {
+        let argument = args[i].as_str();
+        if valued.contains(&argument) {
+            ensure!(i + 1 < args.len(), "{argument} needs a value");
+            i += 2;
+            continue;
+        }
+        ensure!(
+            !argument.starts_with('-') || allowed.contains(&argument),
+            "Unknown option {argument}; see gif-player --help"
+        );
+        i += 1;
+    }
+    Ok(())
 }
 pub fn help() {
     println!(
@@ -217,6 +243,7 @@ pub fn run(args: &Args) -> Result<i32> {
             return Ok(0);
         }
         "install-plugin" => {
+            check_flags(a, &["--no-bar"], &["--bar"])?;
             let destination = a
                 .get(1)
                 .filter(|s| !s.starts_with("--"))
@@ -360,7 +387,19 @@ pub fn run(args: &Args) -> Result<i32> {
         Ok(value) => value,
         Err(e) if ["list", "edit", "lock", "stop-all", "kill-all"].contains(&a[0].as_str()) => {
             if a[0] != "list" {
-                println!("Keine Widgets aktiv");
+                let german = ["LC_ALL", "LC_MESSAGES", "LANG"]
+                    .iter()
+                    .filter_map(|key| env::var(key).ok())
+                    .find(|value| !value.is_empty())
+                    .is_some_and(|value| value.starts_with("de"));
+                println!(
+                    "{}",
+                    if german {
+                        "Keine Widgets aktiv"
+                    } else {
+                        "No active GIFs"
+                    }
+                );
             }
             let _ = e;
             return Ok(0);

@@ -137,5 +137,13 @@
   "edit_hint_short": "Drag to move · Scroll to resize · Done to lock",
   "disconnected": "Player is stopped",
   "reconnect_hint": "Start the player to resume using your GIF collection.",
-  "bar_hint": "Click: playback · Right click: collection"
+  "bar_hint": "Click: playback · Right click: collection",
+  "layout_count.one": "{count} GIF",
+  "layout_count.other": "{count} GIFs",
+  "collection_count_n": "{count} GIFs in your collection",
+  "layer_short_overlay": "Overlay",
+  "layer_short_top": "Top",
+  "layer_short_bottom": "Bottom",
+  "layer_short_background": "Background",
+  "no_layouts_hint": "Arrange your GIFs, then name the layout above and choose Save."
 }

@@ -20,7 +20,7 @@ jobs:
       - name: Install native build and real Wayland test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libxkbcommon-dev pkg-config fonts-dejavu-core sway grim desktop-file-utils
+          sudo apt-get install --yes --no-install-recommends libxkbcommon-dev pkg-config fonts-dejavu-core sway grim wl-clipboard desktop-file-utils
           rustup update stable --no-self-update
           rustup default stable
           rustup component add rustfmt clippy

@@ -17,6 +17,7 @@ fn main() {
     let result = (|| -> anyhow::Result<i32> {
         let args = cli::parse()?;
         if args.args[0] == "daemon" {
+            cli::check_flags(&args.args, &["--headless", "--stay", "--no-restore"], &[])?;
             if let Err(error) = diagnostics::init(&args.paths) {
                 eprintln!("gif-player diagnostics unavailable: {error:#}");
             }

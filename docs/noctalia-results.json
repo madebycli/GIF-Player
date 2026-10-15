@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-14",
+  "date": "2026-10-15",
   "host": "Noctalia 5.2.1, upstream Nixpkgs binary; upstream source also compiled unchanged",
   "plugin_api": 30,
   "compositor": "Sway 1.10.1 headless pixman / software Mesa EGL",
@@ -23,11 +23,13 @@
     "live Catppuccin-to-Dracula palette and configured monospace font synchronization with the normal Rust window",
     "logging-level button changes info/debug/trace in the actual daemon",
     "native Export logs button creates version 1.2 report without warnings",
-    "normal Rust app export button and completed-path footer"
+    "normal Rust app export button and completed-path footer",
+    "1.4.0: tools/noctalia_host_check.py - install-plugin attaches the bar widget; native picker opened through noctalia msg; three real pointer clicks on native tiles start three GIFs",
+    "1.4.0: native control panel opens; all fourteen colour roles reach the daemon; run-time scheme change (Noctalia default to Dracula) reaches the daemon and the Rust window"
   ],
   "limits": [
     "Mango runtime unavailable without /dev/dri",
     "Noctalia host tested on Sway; hardware font/display appearance can differ"
   ],
-  "version": "1.2.0"
+  "version": "1.4.0"
 }

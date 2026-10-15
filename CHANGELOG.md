@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0 — Native Noctalia look, steadier input, fewer logic gaps
+
+- Rebuild the standalone Rust interface on Noctalia 5.2.1's design system: 38/32 px controls, 3/6/9/12 px radii, 1 px outlines, a 2 px `secondary` focus ring, `hover`/`on_hover` feedback, card/panel/tab/toggle/slider/scrollbar chrome, bold `primary` page titles and original vector icons. The Noctalia service now forwards all fourteen colour roles (was eight), so hover labels, destructive actions and focus rings follow the real host live. Floating panels are rounded Noctalia panels; the app window keeps its normal compositor-managed frame.
+- Page layouts: sidebar tabs with a live instance badge, instance list with thumbnails instead of the previous/next pager, grouped cards, collapsible detail sections and aligned slider/value rows. The collection keeps its minimal, continuous image toggle: tiles gain rounded previews, a hover/keyboard "Click to play/stop" hint and an active badge, but no per-image buttons and no pagination.
+- Pointer: buttons activate on release over the same control, sliders follow Noctalia's thumb geometry and snap to 1 %, the overlay scrollbar widens on hover and can be dragged, wheel scrolling targets the list under the pointer.
+- Keyboard and text: caret placement by click, selection by drag/Shift, Left/Right/Home/End/Delete, Ctrl+Backspace/Delete word removal, Ctrl+C/X/V through the Wayland clipboard, client-side key repeat, Up/Down/Left/Right navigation between tiles and rows, Page Up/Down, Tab at the edge of a long list continues into the next rows, and focused controls scroll into view. Focus is tracked by control identity rather than draw order.
+- Search matches every typed word against the relative path (folders included) without caring about case or common accents; the temporary parent path never matches. Collections sort case-insensitively, an unreadable subfolder no longer hides the rest, and the list refreshes when the window regains focus.
+- The first click in a text field selects its value so typing replaces it; a second click places the caret.
+- Fix: `gif-player COMMAND --help` ran the command (starting a daemon, opening panels or editing Noctalia's settings); misspelled `daemon`/`install-plugin` options are rejected instead of ignored; the "no widgets" message follows the session language.
+- Performance: scaled thumbnails are cached per file/frame/size and clip masks are only used where a shape crosses its region. Measured on the same collection page (60 scroll redraws, pointer parked on empty space, software-rendered Sway sandbox), the median redraw fell from 21.6 ms to 15.1 ms (p90 30.2 ms to 22.6 ms); an idle open window issues no redraws.
+- Tests: 38 Rust tests (was 19) and 20 real Sway assertions (was 16), including typed search plus Enter, client-side key repeat, clipboard paste/copy against `wl-clipboard` and an idle-daemon check after the window closes. Official Noctalia plugin lint reports 0 errors and 0 warnings.
+
 ## 1.3.0 — Clearer, more intuitive controls
 
 - Put playback, edit/done, visibility and stop first; move position, motion and advanced tools into expandable sections.

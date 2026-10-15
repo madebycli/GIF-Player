@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
         env["SWAYSOCK"] = str(next(runtime.glob("sway-ipc.*.sock")))
         fixture = root / "fixture.gif"
         subprocess.run([str(examples / "generate_fixture"), str(fixture)], check=True)
-        launch([binary, "daemon", "--stay", "--no-restore"], "player")
+        player = launch([binary, "daemon", "--stay", "--no-restore"], "player")
         wait_for(lambda: (runtime / "gif-player/daemon.sock").exists(), "player socket")
         launch([str(examples / "input_probe")], "input-probe")
         probe_log = artifacts / "input-probe.log"
@@ -145,7 +145,9 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
             pixel = json.loads(subprocess.check_output([str(examples / "png_pixel"), str(picture), "350", "600"]))
             return pixel == [18,18,23,255]
         wait_for(ui_ready, "standalone surface first presentation")
-        input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 480) + " 185")
+        # The floating panel is centred (900x688 on a 1280x720 logical output): its Pause button is the
+        # first control of the primary action row at panel position (322, 172).
+        input_command("move " + str((1280 if ui_output == "HEADLESS-2" else 0) + 190 + 322) + " " + str(16 + 172))
         input_command("click")
         (artifacts / "standalone-state.json").write_text(json.dumps(request({"action":"snapshot"}),indent=2))
         wait_for(lambda: request({"action": "status", "id": "test"})["paused"], "standalone primary playback action")
@@ -161,6 +163,38 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
         subprocess.run(["swaymsg", '[app_id="gif-player-input-probe"] fullscreen disable'],env=env,check=True,stdout=subprocess.DEVNULL)
         subprocess.run(["swaymsg", '[app_id="io.github.madebycli.NoctaliaGifPlayer"] focus'],env=env,check=True,stdout=subprocess.DEVNULL)
         time.sleep(0.1)
+        # Real keyboard behaviour of the app window: typing, Enter, key repeat and the clipboard.
+        shutil.copy(fixture, root / "zebra.gif")
+        assert request({"action": "library-directory", "path": str(root)})["ok"]
+        time.sleep(0.4)
+        def widget_ids():
+            return {widget["id"] for widget in request({"action": "snapshot"})["widgets"]}
+        input_command("ctrl-f")
+        input_command("text ZEBRA")
+        input_command("key 28")
+        wait_for(lambda: "zebra" in widget_ids(), "typed search followed by Enter starts the first match")
+        assert request({"action": "quit", "id": "zebra"})["ok"]
+        # The compositor only advertises the repeat rate; the client must repeat a held key itself.
+        driver.stdin.write("keydown 14\n")
+        driver.stdin.flush()
+        assert driver.stdout.readline().strip() == "done keydown 14"
+        time.sleep(1.6)
+        input_command("keyup 14")
+        input_command("key 28")
+        wait_for(lambda: "test" not in widget_ids(), "held Backspace repeated and emptied the query")
+        clipboard_checked = False
+        if shutil.which("wl-copy") and shutil.which("wl-paste"):
+            subprocess.run(["wl-copy", "zebra"], env=env, check=True, timeout=5)
+            input_command("ctrl-f")
+            input_command("ctrl-v")
+            input_command("key 28")
+            wait_for(lambda: "zebra" in widget_ids(), "clipboard text pasted into the search field")
+            assert request({"action": "quit", "id": "zebra"})["ok"]
+            input_command("ctrl-f")
+            input_command("ctrl-c")
+            copied = subprocess.run(["wl-paste", "-n"], env=env, capture_output=True, text=True, timeout=5).stdout
+            assert copied == "zebra", ("Ctrl+C did not publish the selection", copied)
+            clipboard_checked = True
         input_command("ctrl-w")
         def app_is_closed():
             tree=json.loads(subprocess.check_output(["swaymsg","-t","get_tree","-r"],env=env))
@@ -168,6 +202,15 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
                 return node.get("app_id")=="io.github.madebycli.NoctaliaGifPlayer" or any(contains(child) for child in node.get("nodes",[])+node.get("floating_nodes",[]))
             return not contains(tree)
         wait_for(app_is_closed,"real app keyboard shortcut")
+        # Closing the window while the pointer rested on a tile must leave the daemon idle (a hover
+        # request once ping-ponged with cache release and spun at full speed after the close).
+        def cpu_seconds():
+            fields = Path(f"/proc/{player.pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+        time.sleep(0.5)
+        busy_before = cpu_seconds()
+        time.sleep(1.5)
+        assert cpu_seconds() - busy_before < 0.25, "daemon spins after the application window closed"
         subprocess.run(["swaymsg", '[app_id="gif-player-input-probe"] focus'],env=env,check=True,stdout=subprocess.DEVNULL)
         subprocess.run(["swaymsg", '[app_id="gif-player-input-probe"] fullscreen enable'],env=env,check=True,stdout=subprocess.DEVNULL)
         native = root / "native.gif"
@@ -209,8 +252,9 @@ with tempfile.TemporaryDirectory(prefix="gif-wayland-") as directory:
             assert any(record.get("event") == event for record in records), f"missing real diagnostic event: {event}"
         assert (artifacts / "diagnostics/snapshot.json").exists()
         request({"action": "quit-daemon"})
-        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "normal app keyboard focus and shortcut", "native resolution under cache pressure", "unsnapped visual drag", "output removal", "asynchronous diagnostic trace export"]}, indent=2))
-        print("16 real Wayland acceptance checks passed")
+        checks = ["fullscreen overlay", "locked GIF click-through", "locked transparent canvas", "keyboard and scroll pass-through", "edit-region isolation", "drag", "offscreen", "two outputs", "fractional scale", "standalone UI interaction", "normal tiled application window", "normal app keyboard focus and shortcut", "idle daemon after closing the window", "typed search and Enter", "client-side key repeat", ] + (["clipboard paste and copy"] if clipboard_checked else []) + ["native resolution under cache pressure", "unsnapped visual drag", "output removal", "asynchronous diagnostic trace export"]
+        (artifacts / "result.json").write_text(json.dumps({"ok": True, "compositor": "Sway", "checks": checks}, indent=2))
+        print(f"{len(checks)} real Wayland acceptance checks passed")
     finally:
         for child in reversed(children):
             if child.poll() is None:

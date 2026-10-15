@@ -107,7 +107,8 @@ impl Paths {
         if self.gif_dir.exists() {
             scan(&self.gif_dir, &mut files, 0)?;
         }
-        files.sort();
+        // Case-insensitive so "aurora.gif" and "Zebra.gif" order as people expect.
+        files.sort_by_cached_key(|p| (p.to_string_lossy().to_lowercase(), p.clone()));
         Ok(files)
     }
     pub fn resolve(&self, name: &str) -> Result<PathBuf> {
@@ -153,9 +154,17 @@ fn scan(dir: &Path, files: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
         depth < 64 && files.len() < 100_000,
         "Collection exceeds scan limits"
     );
-    for entry in fs::read_dir(dir).with_context(|| format!("Read {}", dir.display()))? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        // One unreadable subfolder must not hide the rest of the collection.
+        Err(_) if depth > 0 => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("Read {}", dir.display())),
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         if kind.is_dir() {
             scan(&entry.path(), files, depth + 1)?;
         } else if (kind.is_file() || (kind.is_symlink() && entry.path().is_file()))
