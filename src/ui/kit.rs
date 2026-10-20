@@ -156,7 +156,13 @@ impl Ui {
             return;
         }
         let s = self.to_screen(r);
-        let Some(path) = round_path(s.x as f32, s.y as f32, s.w as f32, s.h as f32, radius) else {
+        let Some(path) = round_path(
+            s.x as f32,
+            s.y as f32,
+            s.w as f32,
+            s.h as f32,
+            radius * self.theme.style.corner_radius_scale,
+        ) else {
             return;
         };
         let mut paint = Paint::default();
@@ -190,7 +196,7 @@ impl Ui {
             s.y as f32 + half,
             s.w as f32 - width,
             s.h as f32 - width,
-            (radius - half).max(0.0),
+            (radius * self.theme.style.corner_radius_scale - half).max(0.0),
         ) else {
             return;
         };
@@ -223,6 +229,7 @@ impl Ui {
         if !self.visible(area) {
             return;
         }
+        let radius = radius * self.theme.style.corner_radius_scale;
         let k = self.sc();
         let s = self.to_screen(area);
         let factor = (s.w as f32 / anim.width as f32).min(s.h as f32 / anim.height as f32);
@@ -499,7 +506,7 @@ impl Ui {
             }
             if focused {
                 self.stroke_round(pix, r, t.secondary, RADIUS_MD, FOCUS_RING);
-            } else if let Some(color) = border {
+            } else if let Some(color) = border.filter(|_| t.style.button_borders) {
                 self.stroke_round(pix, r, color, RADIUS_MD, 1.0);
             }
             let icon = if b.icon.is_some() { 16.0 } else { 0.0 };
@@ -602,7 +609,7 @@ impl Ui {
             self.fill_round(pix, r, if focused { t.surface } else { base }, RADIUS_MD);
             if focused {
                 self.stroke_round(pix, r, t.secondary, RADIUS_MD, FOCUS_RING);
-            } else {
+            } else if t.style.input_borders {
                 self.stroke_round(
                     pix,
                     r,
@@ -945,8 +952,15 @@ impl Ui {
     }
     pub(super) fn card_frame(&mut self, pix: &mut Pixmap, r: &Rect) {
         let t = self.theme;
-        self.fill_round(pix, r, t.variant, RADIUS_XL);
-        self.stroke_round(pix, r, t.outline, RADIUS_XL, 1.0);
+        self.fill_round(
+            pix,
+            r,
+            with_alpha(t.variant, t.style.card_opacity),
+            RADIUS_XL,
+        );
+        if t.style.panel_borders {
+            self.stroke_round(pix, r, t.outline, RADIUS_XL, 1.0);
+        }
     }
     /// Card with Noctalia padding; `build` runs twice (measure, then draw) and returns its height.
     pub(super) fn card<F>(&mut self, pix: &mut Pixmap, x: i32, y: i32, w: i32, mut build: F) -> i32

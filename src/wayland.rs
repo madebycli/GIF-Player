@@ -544,8 +544,8 @@ impl State {
                         canvas: false,
                         x: 0,
                         y: 0,
-                        width: 900.min(output.width.saturating_sub(32)).max(320),
-                        height: 740.min(output.height.saturating_sub(32)).max(320),
+                        width: 900.min(output.width.saturating_sub(32)).max(1),
+                        height: 740.min(output.height.saturating_sub(32)).max(1),
                         widgets: Vec::new(),
                         ui: true,
                     },
@@ -575,7 +575,7 @@ impl State {
                         shell.create_window(surface.clone(), WindowDecorations::RequestServer, qh);
                     window.set_title("Noctalia GIF Player");
                     window.set_app_id("io.github.madebycli.NoctaliaGifPlayer");
-                    window.set_min_size(Some((640, 420)));
+                    window.set_min_size(Some((320.min(spec.width), 240.min(spec.height))));
                     Presentation::Window(window)
                 } else {
                     let layer = self.layer_shell.create_layer_surface(
@@ -1418,6 +1418,8 @@ impl PointerHandler for State {
                 json!({"surface":spec.key,"position":[x,y],"kind":format!("{:?}",event.kind)})
             );
             if spec.ui {
+                let scale = self.ui.coordinate_scale();
+                let (x, y) = (x / scale, y / scale);
                 match event.kind {
                     PointerEventKind::Press { button: 0x110, .. } => {
                         self.ui.press(x, y, &mut self.engine)
@@ -1433,9 +1435,9 @@ impl PointerHandler for State {
                         if vertical.absolute != 0.0 || vertical.discrete != 0 =>
                     {
                         self.ui.scroll(if vertical.absolute != 0.0 {
-                            vertical.absolute
+                            vertical.absolute / scale
                         } else {
-                            vertical.discrete as f64 * 15.0
+                            vertical.discrete as f64 * 15.0 / scale
                         });
                     }
                     _ => {}

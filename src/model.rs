@@ -797,7 +797,13 @@ impl Engine {
                     .and_then(Value::as_str)
                     .unwrap_or("sans-serif");
                 ensure!(font.len() <= 256, "Font family too long");
-                let appearance = json!({"palette":palette,"font_family":font});
+                let style = crate::ui::theme::HostStyle::parse(cmd.get("style"))?;
+                let border = cmd.get("panel_border_color").unwrap_or(&palette["outline"]);
+                ensure!(
+                    border.is_null() || crate::ui::theme::parse_hex(border).is_some(),
+                    "Invalid panel border color"
+                );
+                let appearance = json!({"palette":palette,"font_family":font,"style":style,"panel_border_color":border});
                 if self.store.settings["appearance"] != appearance {
                     crate::diag!(
                         Debug,

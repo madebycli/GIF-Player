@@ -1,7 +1,7 @@
 id = "madebycli/gif-player"
 name = "Noctalia GIF Player"
-version = "1.4.0"
-plugin_api = 30
+version = "1.5.0"
+plugin_api = 31
 author = "madebycli"
 license = "LicenseRef-All-Rights-Reserved"
 description = "Native Rust GIF overlays with shared playback controls, layouts and a floating collection picker."
@@ -34,8 +34,8 @@ id = "control"
 entry = "control.luau"
 width = 640
 height = 640
-placement = "attached"
-position = "auto"
+placement = "floating"
+position = "center"
 layer = "overlay"
 
 [[panel]]

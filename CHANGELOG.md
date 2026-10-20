@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 — Effective host appearance and small displays
+
+- Follow Noctalia’s effective corner scale, panel/card transparency, border toggles/width/color, close buttons and accessibility UI scale in addition to its fourteen color roles and font. Native cards refresh when host settings change. The Rust UI validates, retains and applies the host style through appearance IPC; palette updates no longer leave image corners cached in the previous shape.
+- Size native content from logical monitor dimensions and host UI scale; adapt gallery columns and keep long content inside scroll views. Playback controls default to a centered floating overlay. The normal Rust app replaces its sidebar with compact navigation when space is tight, and floating surfaces no longer impose a minimum larger than a small output.
+- Native panels use Noctalia’s own shadows/animations/compositor effects. Standalone Rust windows keep compositor-managed effects; this release does not install blur rules or independently generate wallpaper palettes.
+- Require API 31, the actual introduction level of getColor. Reinstall the embedded local plugin and restart the old daemon after upgrading.
+
 ## 1.4.0 — Native Noctalia look, steadier input, fewer logic gaps
 
 - Rebuild the standalone Rust interface on Noctalia 5.2.1's design system: 38/32 px controls, 3/6/9/12 px radii, 1 px outlines, a 2 px `secondary` focus ring, `hover`/`on_hover` feedback, card/panel/tab/toggle/slider/scrollbar chrome, bold `primary` page titles and original vector icons. The Noctalia service now forwards all fourteen colour roles (was eight), so hover labels, destructive actions and focus rings follow the real host live. Floating panels are rounded Noctalia panels; the app window keeps its normal compositor-managed frame.

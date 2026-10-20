@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -33,6 +34,8 @@ parser.add_argument("--binary", default="target/release/gif-player")
 parser.add_argument("--examples", default="target/release/examples")
 parser.add_argument("--artifacts", default="artifacts-noctalia")
 parser.add_argument("--scheme", default="Dracula", help="built-in colour scheme to switch to at run time")
+parser.add_argument("--sound-binary", help="also install and exercise the native Nix Sound overlay")
+parser.add_argument("--pulse-module-dir", help="optional module path for an isolated audio test server")
 args = parser.parse_args()
 binary = str(Path(args.binary).resolve())
 examples = Path(args.examples).resolve()
@@ -99,6 +102,17 @@ with tempfile.TemporaryDirectory(prefix="noctalia-host-") as directory:
         env["SWAYSOCK"] = str(next(runtime.glob("sway-ipc.*.sock")))
         install = run([binary, "install-plugin"])
         assert "attached its widget to bar" in install.stdout, install
+        if args.sound_binary:
+            env["PULSE_SERVER"] = "unix:" + str(runtime / "pulse.sock")
+            pulse = ["pulseaudio", "-n", "--daemonize=no", "--use-pid-file=no", "--exit-idle-time=-1",
+                     "--load=module-native-protocol-unix socket=" + str(runtime / "pulse.sock") + " auth-anonymous=1",
+                     "--load=module-null-sink sink_name=speakers", "--load=module-null-source source_name=microphone"]
+            if args.pulse_module_dir:
+                pulse += ["--dl-search-path=" + args.pulse_module_dir]
+            launch(pulse, "pulse")
+            wait_for(lambda: run(["pactl", "info"]).returncode == 0, "isolated audio server")
+            installed_sound = run([args.sound_binary, "install-plugin"])
+            assert installed_sound.returncode == 0, installed_sound.stderr
         launch([shutil.which("noctalia", path=env["PATH"])], "noctalia")
         wait_for(lambda: run(["noctalia", "msg", "color-scheme-get"]).returncode == 0, "Noctalia IPC", 40)
         launch([binary, "daemon", "--stay", "--no-restore"], "player")
@@ -142,6 +156,58 @@ with tempfile.TemporaryDirectory(prefix="noctalia-host-") as directory:
         wait_for(lambda: appearance()["palette"].get("primary") != before.get("primary"), "live colour-scheme change reaches the daemon")
         time.sleep(1.5)
         shot("rust-app-after-scheme-change")
+        # Change the effective host settings, retaining the installed plugins and bar layout.
+        settings_file = root / "state/noctalia/settings.toml"
+        settings = tomllib.loads(settings_file.read_text())
+        shell = settings.setdefault("shell", {})
+        shell["corner_radius_scale"] = 0.0
+        shell["button_borders"] = False
+        shell["input_borders"] = False
+        shell["settings_window_translucent"] = True
+        shell.setdefault("panel", {}).update({"transparency_mode": "glass", "borders": False})
+        settings.setdefault("accessibility", {})["ui_scale"] = 1.25
+
+        def write_toml(data, path=()):
+            lines = ["[" + ".".join(json.dumps(p) for p in path) + "]"] if path else []
+            for key, value in data.items():
+                if not isinstance(value, dict):
+                    lines.append(json.dumps(key) + " = " + json.dumps(value))
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    lines += write_toml(value, path + (key,))
+            return lines
+
+        updated = settings_file.with_suffix(".new")
+        updated.write_text("\n".join(write_toml(settings)) + "\n")
+        updated.replace(settings_file)
+        wait_for(lambda: appearance().get("style", {}).get("corner_radius_scale") == 0
+                 and appearance()["style"]["panel_opacity"] < .56
+                 and appearance()["style"]["ui_scale"] == 1.25, "effective shape/transparency/UI scale reaches Rust")
+        shot("rust-app-glass-square")
+        assert panel("control").returncode == 0
+        shot("native-control-glass-square")
+        assert panel("control").returncode == 0
+        assert run(["swaymsg", "output", "HEADLESS-1", "mode", "800x600"]).returncode == 0
+        assert panel("picker").returncode == 0
+        shot("native-picker-small-scaled")
+        assert panel("picker").returncode == 0
+        extra_checks = ["effective corner/border/transparency/UI scale reaches Rust live", "native floating panels at 800x600 and 125% UI scale"]
+        if args.sound_binary:
+            assert run([args.sound_binary, "sound"]).returncode == 0
+            wait_for(lambda: (runtime / "nix-sound/audio.sock").exists(), "native Sound starts its Rust backend")
+            state = json.loads(run([args.sound_binary, "snapshot"]).stdout)
+            assert state["outputs"] and state["inputs"]
+            shot("native-sound-small-scaled")
+            assert run(["swaymsg", "output", "HEADLESS-1", "mode", "1366x768"]).returncode == 0
+            time.sleep(1.2)
+            # Growing an output can retain the host's previous configured surface; reopening
+            # negotiates its preferred size on the new monitor without rendering past it.
+            assert run([args.sound_binary, "sound"]).returncode == 0
+            assert run([args.sound_binary, "sound"]).returncode == 0
+            shot("native-sound-wide-scaled")
+            response = run([args.sound_binary, "request", json.dumps({"action":"volume","kind":"sink","id":state["outputs"][0]["id"],"volume":.32})])
+            assert response.returncode == 0, response.stderr
+            extra_checks += ["native Sound plugin opens and starts its event backend", "Sound at 800x600 and 1366x768 with 125% scaling and real audio control"]
         (artifacts / "noctalia-host-result.json").write_text(json.dumps({
             "ok": True,
             "noctalia": run(["noctalia", "--version"]).stdout.strip(),
@@ -150,7 +216,7 @@ with tempfile.TemporaryDirectory(prefix="noctalia-host-") as directory:
             "checks": ["install-plugin attaches the bar widget", "native picker opens through noctalia msg",
                        "real pointer clicks on native tiles start three GIFs", "native control panel opens",
                        "all fourteen colour roles reach the daemon", "Rust application window opens",
-                       "run-time colour-scheme change reaches the daemon"],
+                       "run-time colour-scheme change reaches the daemon"] + extra_checks,
         }, indent=2))
         print("Noctalia host checks passed")
     finally:

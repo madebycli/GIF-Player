@@ -1,5 +1,6 @@
 --!nonstrict
 local exe = noctalia.getConfig("executable")
+local host = require("./host.luau")
 local queue = {}
 local busy = false
 local started = false
@@ -94,9 +95,15 @@ local function appearance()
     -- Every role the standalone UI draws with, so it matches native components (hover/on_hover, focus ring, destructive).
     for _, role in ipairs({"surface", "surface_variant", "on_surface", "on_surface_variant", "primary", "on_primary", "secondary", "on_secondary", "error", "on_error", "outline", "shadow", "hover", "on_hover"}) do palette[role] = noctalia.getColor(role) end
     local shell = noctalia.getSetting("shell") or {}
-    local value = {action = "appearance", palette = palette, font_family = shell.font_family or "sans-serif"}
+    local value = {action = "appearance", palette = palette, font_family = shell.font_family or "sans-serif",
+        style = host.style(), panel_border_color = host.borderColor()}
     local encoded = noctalia.json.encode(value)
-    if encoded ~= lastAppearance and noctalia.state.get("connected") then lastAppearance = encoded; send(value) end
+    if encoded ~= lastAppearance then
+        noctalia.state.set("host-appearance", encoded)
+        if noctalia.state.get("connected") then
+            send(value, function(data) if data and data.ok then lastAppearance = encoded end end)
+        end
+    end
 end
 function update()
     noctalia.setUpdateInterval(1000)

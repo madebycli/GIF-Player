@@ -39,3 +39,7 @@ The preserved Python branch permits regression comparison and rollback. Technica
 ## Diagnostics
 
 A bounded nonblocking channel sends serialized JSONL records to one Rust writer thread. Severity checks happen before field construction. Each record is capped at 8 KiB; the 256-slot queue, 32 KiB write buffer and five 8 MiB rotating files bound logging resources. A temporary export worker asks the writer for consistent flushed copies, then writes private report files. Completion signals the existing Unix wake stream; snapshots/GUI receive the result without waiting for disk work in the Wayland loop. A separate advisory lock prevents competing writers. Logs expose failures/dropped events and preserve previous sessions. See docs/diagnostics.md for the public format and data scope.
+
+## Effective host appearance and sizing (1.5)
+
+The shared `host.luau` adapter reads Noctalia’s effective shell/accessibility settings and logical output sizes. Native section cards use the host corner multiplier, border policy and transparency mode; native panel chrome, shadows and animation remain owned by Noctalia. Gallery columns and content scroll viewports fit the clamped output. The appearance IPC carries validated style values alongside the palette/font; Rust invalidates rounded image caches, changes shapes/borders/background alpha live and maps rendering and pointer coordinates through the same accessibility scale. Small app windows replace the sidebar with compact navigation. Standalone window shadows/blur remain compositor-managed and are not emulated by the plugin.

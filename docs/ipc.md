@@ -46,3 +46,7 @@ Request size is bounded at 1 MiB. Malformed or unsupported commands return `ok:f
 The CLI `logs export [NEW_DIRECTORY]` resolves relative paths in the caller's directory and waits up to 30 seconds for completion. A stopped daemon is handled through offline export rather than autostart. Live IPC errors are reported rather than silently substituted with an offline report.
 
 Snapshots include `collection_dir`, the authoritative current collection path. Frontends compare it to refresh their libraries when another frontend changes the folder; no periodic library scan is added.
+
+## Effective Noctalia appearance
+
+The `appearance` action accepts `palette`, `font_family`, optional `panel_border_color` (`#RRGGBB`) and an optional `style` object. Supported style fields are `corner_radius_scale` (0–2), `ui_scale` (0.1–4), `panel_opacity`/`card_opacity` (0–1), `panel_border_width` (0–20), and the booleans `button_borders`, `input_borders`, `panel_borders`, `window_translucent` and `show_close_buttons`. Invalid style updates are rejected atomically. Older palette/font-only clients receive default style values. The style is retained with the last host palette and reaches open Rust windows through the usual revision. The plugin reads effective host settings, never the wallpaper or a second palette generator. Native host shadows and transitions remain host responsibilities.

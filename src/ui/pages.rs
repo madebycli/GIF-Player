@@ -33,6 +33,12 @@ impl Ui {
         })
     }
     pub fn draw(&mut self, engine: &Engine, width: u32, height: u32, scale: f64) -> Pixmap {
+        let buffer_width = (width as f64 * scale).ceil().max(1.0) as u32;
+        let buffer_height = (height as f64 * scale).ceil().max(1.0) as u32;
+        let ui_scale = self.theme.style.ui_scale as f64;
+        let width = (width as f64 / ui_scale).floor().max(1.0) as u32;
+        let height = (height as f64 / ui_scale).floor().max(1.0) as u32;
+        let scale = scale * ui_scale;
         self.paint_scale = scale as f32;
         if (self.cache_scale - scale as f32).abs() > 1e-6 {
             self.image_cache.clear();
@@ -42,11 +48,7 @@ impl Ui {
             face.set_scale(scale as f32);
         }
         let (w, h) = (width as i32, height as i32);
-        let mut pix = Pixmap::new(
-            (width as f64 * scale).ceil().max(1.0) as u32,
-            (height as f64 * scale).ceil().max(1.0) as u32,
-        )
-        .unwrap();
+        let mut pix = Pixmap::new(buffer_width, buffer_height).unwrap();
         let t = self.theme;
         self.hits.clear();
         self.list_rect = None;
@@ -54,22 +56,42 @@ impl Ui {
         let full = rect(0, 0, w, h);
         self.set_region(&pix, (0, 0), full.clone(), false);
         if self.windowed {
-            pix.fill(t.surface);
+            pix.fill(with_alpha(
+                t.surface,
+                if t.style.window_translucent {
+                    t.style.panel_opacity
+                } else {
+                    1.0
+                },
+            ));
         } else {
             // Floating panels are rounded Noctalia panels: surface fill, 1 px outline, 12 px radius.
             pix.fill(Color::TRANSPARENT);
-            self.fill_round(&mut pix, &full, t.surface, RADIUS_XL);
-            self.stroke_round(&mut pix, &full, t.outline, RADIUS_XL, 1.0);
+            self.fill_round(
+                &mut pix,
+                &full,
+                with_alpha(t.surface, t.style.panel_opacity),
+                RADIUS_XL,
+            );
+            if t.style.panel_borders && t.style.panel_border_width > 0.0 {
+                self.stroke_round(
+                    &mut pix,
+                    &full,
+                    with_alpha(t.panel_border, t.style.panel_opacity),
+                    RADIUS_XL,
+                    t.style.panel_border_width,
+                );
+            }
         }
-        let sidebar = if self.windowed {
+        let sidebar = if self.windowed && w >= 680 {
             if w >= 900 { 204 } else { 176 }
         } else {
             0
         };
-        if self.windowed {
+        if self.windowed && sidebar > 0 {
             self.sidebar(&mut pix, engine, h, sidebar);
         }
-        let x = if self.windowed { 12 + sidebar + 20 } else { 20 };
+        let x = if sidebar > 0 { 12 + sidebar + 20 } else { 20 };
         let cw = (w - x - 20).max(1);
         let titles = ["collection", "starter", "profiles", "settings_tab"];
         let subtitles = [
@@ -108,6 +130,31 @@ impl Ui {
             cw - header_right,
         );
         let mut top = 18 + lh_title + 2 + lh_sub + 16;
+        if self.windowed && sidebar == 0 {
+            let icons = [Icon::Photo, Icon::Sliders, Icon::Layers, Icon::Settings];
+            let button_width = ((cw - 3 * SPACE_SM) / 4).max(1);
+            for (index, icon) in icons.into_iter().enumerate() {
+                let label = self.tr(titles[index]);
+                let button = Btn {
+                    icon: Some(icon),
+                    hint: &label,
+                    selected: self.tab == index,
+                    ..Btn::default()
+                };
+                self.button(
+                    &mut pix,
+                    &rect(
+                        x + index as i32 * (button_width + SPACE_SM),
+                        top,
+                        button_width,
+                        CONTROL_SM,
+                    ),
+                    &button,
+                    Action::Tab(index),
+                );
+            }
+            top += CONTROL_SM + SPACE_SM;
+        }
         // Errors and notices stay visible until dismissed or the next interaction.
         let error = self.error.clone().or_else(|| engine.error.clone());
         if let Some(message) = error.clone().or_else(|| self.notice.clone()) {
@@ -245,6 +292,11 @@ impl Ui {
             ("collection", Icon::Photo, "picker")
         };
         let (other_label, settings_label) = (self.tr(other.0), self.tr("settings_tab"));
+        let (other_label, settings_label) = if w < 600 {
+            (String::new(), String::new())
+        } else {
+            (other_label, settings_label)
+        };
         let widths = [
             self.btn_width(&other_label, true),
             self.btn_width(&settings_label, true),
@@ -267,6 +319,9 @@ impl Ui {
         let order = [2usize, 1, 0];
         let mut used = 0;
         for (slot, (label, icon, action)) in items.into_iter().enumerate() {
+            if action == Action::Close && !self.theme.style.show_close_buttons {
+                continue;
+            }
             let width = widths[order[slot]];
             right -= width;
             let hint = if label.is_empty() {
@@ -520,7 +575,12 @@ impl Ui {
         let focus = self.is_focused(&action);
         let label_r = rect(r.x, r.y, r.w, r.h + 8 + 20);
         if self.visible(&label_r) {
-            self.fill_round(pix, r, t.variant, RADIUS_LG);
+            self.fill_round(
+                pix,
+                r,
+                with_alpha(t.variant, t.style.card_opacity),
+                RADIUS_LG,
+            );
             let animation = engine
                 .assets
                 .get(path)

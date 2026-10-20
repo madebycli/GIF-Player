@@ -1,8 +1,12 @@
 --!nonstrict
 -- This module is evaluated in each panel's own VM. The host renders native controls.
+local host = require("./host.luau")
 return function(initialTab, source)
     local tab = initialTab
     local contentWidth = source == "settings" and 556 or 596
+    local contentHeight = 576
+    local tileWidth = 188
+    local lastGeometry = ""
     local query = ""
     local searchReset = 0
     local category = ""
@@ -97,7 +101,8 @@ return function(initialTab, source)
         local rows = {ui.row({gap = 8}, search)}
         local activePaths = {}
         for _, widget in ipairs(snapshot.widgets or {}) do activePaths[widget.file] = (activePaths[widget.file] or 0) + 1 end
-        local columns = 3
+        local columns = math.max(1, math.min(3, math.floor((contentWidth + 12) / 170)))
+        tileWidth = math.max(1, math.floor((contentWidth - (columns - 1) * 12) / columns))
         local totalRows = math.ceil(#filtered / columns)
         local rowHeight = 148
         local start = math.clamp(scrollRow - 1, 0, math.max(0, totalRows - 1))
@@ -115,15 +120,15 @@ return function(initialTab, source)
                             for _, widget in ipairs(snapshot.widgets or {}) do if widget.file == file.path then command("quit", widget.id) end end
                         else send({action = "spawn", gif = file.path, state = {output = noctalia.focusedOutputName() or ""}}) end
                     end
-                    table.insert(tiles, ui.column({key = file.path, width = 188, height = 136, gap = 8}, {
+                    table.insert(tiles, ui.column({key = file.path, width = tileWidth, height = 136, gap = 8}, {
                         ui.image({key = file.path .. "image", path = hoverPath == file.path and previews[file.path] and previews[file.path][hoverFrame] and previews[file.path][hoverFrame].path or file.path,
-                            width = 188, height = 104, fit = "contain", radius = 9,
+                            width = tileWidth, height = 104, fit = "contain", radius = 9 * (host.style()).corner_radius_scale,
                             border = activeCount > 0 and "primary" or "surface/0", borderWidth = activeCount > 0 and 2 or 0,
                             tooltip = tr(activeCount > 0 and "click_stop" or "click_play") .. " · " .. file.name,
                             onHover = function(entered) hover(file.path, entered) end, onClick = toggle}),
                         ui.label({text = file.name, maxLines = 1, fontSize = 13, color = activeCount > 0 and "primary" or "on_surface_variant"}),
                     }))
-                else table.insert(tiles, ui.box({width = 188, height = 136, fill = "surface/0"})) end
+                else table.insert(tiles, ui.box({width = tileWidth, height = 136, fill = "surface/0"})) end
             end
             table.insert(tilesRows, ui.row({key = "row" .. tostring(row), gap = 12, height = 136}, tiles))
         end
@@ -146,7 +151,7 @@ return function(initialTab, source)
     local function card(title, nodes)
         local children = {ui.label({text = title, fontWeight = "medium", color = "on_surface"})}
         for _, node in ipairs(nodes) do table.insert(children, node) end
-        return ui.column({width = contentWidth - 28, align = "stretch", gap = 12, padding = 14, radius = 12, fill = "surface_variant", border = "outline", borderWidth = 1}, children)
+        return ui.column(host.card({width = contentWidth - 28, align = "stretch"}), children)
     end
     local function fold(key, title, summary, build)
         local nodes = {ui.row({gap = 8, align = "center"}, {
@@ -155,7 +160,7 @@ return function(initialTab, source)
             ui.label({text = summary or "", color = "on_surface_variant", fontSize = 12}),
         })}
         if expanded[key] then table.insert(nodes, build()) end
-        return ui.column({key = key, width = contentWidth - 24, align = "stretch", gap = 12, padding = 12, radius = 12, fill = "surface_variant", border = "outline", borderWidth = 1}, nodes)
+        return ui.column(host.card({key = key, padding = 12, width = contentWidth - 24}), nodes)
     end
     local function slider(widget, key, action, minimum, maximum, label, display)
         return ui.column({gap = 4}, {
@@ -188,7 +193,7 @@ return function(initialTab, source)
         end
         local state = widget.loading and "loading" or widget.error and "load_failed" or not widget.visible and "hidden" or widget.paused and "paused" or "playing"
         table.insert(nodes, ui.row({gap = 14, align = "center"}, {
-            ui.image({path = widget.file, width = 76, height = 68, fit = "contain", radius = 10}),
+            ui.image({path = widget.file, width = 76, height = 68, fit = "contain", radius = 10 * (host.style()).corner_radius_scale}),
             ui.column({gap = 6, flexGrow = 1}, {ui.label({text = id, fontWeight = "bold", fontSize = 18, maxLines = 1}), ui.label({text = tr(state), color = "on_surface_variant", fontSize = 12})}),
             button("", "copy", function()
                 local settings = {}
@@ -335,6 +340,11 @@ return function(initialTab, source)
     end
     render = function()
         if not opened then return end
+        local width, height = host.dimensions(source == "settings" and 600 or 640, source == "settings" and 620 or 640)
+        contentWidth = math.max(1, width - 16)
+        contentHeight = math.max(40, height - 56)
+        lastGeometry = tostring(width) .. ":" .. tostring(height)
+        closeButton = (host.style()).show_close_buttons
         local connected = noctalia.state.get("connected") == true
         local body = source == "picker" and library() or source == "settings" and settings() or not connected and ui.column({key = "control-offline", gap = 16, paddingV = 24}, {
             ui.label({text = tr("disconnected"), fontSize = 18, fontWeight = "medium"}),
@@ -345,18 +355,16 @@ return function(initialTab, source)
         if error == "" then error = snapshot.error or "" end
         local title = source == "picker" and tr("collection") or source == "settings" and tr("settings_tab") or tr("starter")
         local header = {ui.label({text = title, color = "primary", fontSize = 16, fontWeight = "bold", flexGrow = 1})}
-        if source == "control" then table.insert(header, button(tr("collection"), "photo", function() noctalia.togglePanel("madebycli/gif-player:picker") end, {variant = "ghost"})) end
-        if source ~= "control" then table.insert(header, button(tr("starter"), "adjustments", function() noctalia.togglePanel("madebycli/gif-player:control") end, {variant = "ghost"})) end
+        if source == "control" then table.insert(header, button(contentWidth < 480 and "" or tr("collection"), "photo", function() noctalia.togglePanel("madebycli/gif-player:picker") end, {variant = "ghost"})) end
+        if source ~= "control" then table.insert(header, button(contentWidth < 480 and "" or tr("starter"), "adjustments", function() noctalia.togglePanel("madebycli/gif-player:control") end, {variant = "ghost"})) end
         if source ~= "settings" then table.insert(header, button("", "settings", function() noctalia.togglePanel("madebycli/gif-player:settings") end, {tooltip = tr("settings_tab")})) end
         if closeButton then table.insert(header, button("", "x", function() panel.close() end, {tooltip = tr("close")})) end
         local nodes = {ui.row({gap = 8, align = "center"}, header)}
-        if source == "picker" then table.insert(nodes, body) else
-            table.insert(nodes, ui.scroll({key = source .. "-body", width = contentWidth + 16, align = "stretch", flexGrow = 1, gap = 12}, {body}))
-        end
+        local bodyNodes = {body}
         if source == "control" and #(snapshot.widgets or {}) > 1 then
             local paused = true; local locked = true; local visible = false
             for _, widget in ipairs(snapshot.widgets) do if not widget.paused then paused = false end; if not widget.locked then locked = false end; if widget.visible then visible = true end end
-            table.insert(nodes, fold("all", tr("all_gifs"), tostring(#snapshot.widgets), function() return ui.column({gap = 8}, {
+            table.insert(bodyNodes, fold("all", tr("all_gifs"), tostring(#snapshot.widgets), function() return ui.column({gap = 8}, {
                 ui.row({gap = 8}, {
                     button(tr(paused and "play_all" or "pause_all"), paused and "player-play" or "player-pause", function() command(paused and "play" or "pause", "*") end),
                     button(tr(locked and "edit_all" or "done_editing"), locked and "arrows-move" or "check", function() command(locked and "unlock" or "lock", "*") end),
@@ -368,14 +376,23 @@ return function(initialTab, source)
             }) end))
         end
         if error ~= "" then table.insert(nodes, ui.label({text = error, color = "error", maxLines = 2})) end
-        panel.render(ui.column({width = contentWidth + 16, align = "stretch", flexGrow = 1, gap = 12}, nodes))
+        contentHeight = math.max(40, height - (error ~= "" and 125 or 80))
+        if source == "picker" then
+            table.insert(nodes, ui.column({align="stretch",flexGrow=1}, {body}))
+        else
+            table.insert(nodes, ui.scroll({key=source.."-body",align="stretch",flexGrow=1,gap=12},bodyNodes))
+        end
+        panel.render(ui.column({align = "stretch", flexGrow = 1, gap = 12}, nodes))
     end
     noctalia.state.watch("snapshot", function(value) snapshot = value or snapshot; render() end)
     noctalia.state.watch("library", render)
+    noctalia.state.watch("host-appearance", render)
     noctalia.state.watch("error", render)
     noctalia.state.watch("selected", function(id) selected = id; render() end)
     local function onOpen()
+        host.openViewport()
         opened = true
+        panel.setWantsSecondTicks(true)
         noctalia.state.set("panel-open-" .. source, true)
         local shell = noctalia.getSetting("shell")
         closeButton = type(shell) ~= "table" or shell.show_close_buttons ~= false
@@ -383,7 +400,7 @@ return function(initialTab, source)
         noctalia.state.set("start", source .. tostring(nonce))
         render()
     end
-    local function onClose() opened = false; previews = {}; pendingPreviews = {}; noctalia.state.set("panel-open-" .. source, false); hoverPath = nil; panel.setNeedsFrameTick(false) end
+    local function onClose() opened = false; panel.setWantsSecondTicks(false); previews = {}; pendingPreviews = {}; noctalia.state.set("panel-open-" .. source, false); hoverPath = nil; panel.setNeedsFrameTick(false) end
     local function onIpc(event) if event == "refresh" then send({ action = "library" }) end end
     local function onFrameTick(deltaMs)
         local frames = hoverPath and previews[hoverPath]
@@ -399,5 +416,9 @@ return function(initialTab, source)
         end
         if hoverFrame ~= index then hoverFrame = index; render() end
     end
-    return { onOpen = onOpen, onClose = onClose, onIpc = onIpc, onFrameTick = onFrameTick }
+    local function update()
+        local w,h = host.dimensions(source == "settings" and 600 or 640, source == "settings" and 620 or 640)
+        if opened and tostring(w) .. ":" .. tostring(h) ~= lastGeometry then render() end
+    end
+    return { update = update, onOpen = onOpen, onClose = onClose, onIpc = onIpc, onFrameTick = onFrameTick }
 end

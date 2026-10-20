@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::{fs, path::Path};
 
 const FILES: &[(&str, &str)] = &[
+    ("host.luau", include_str!("../plugins/gif-player/host.luau")),
     (
         "plugin.toml",
         include_str!("../plugins/gif-player/plugin.toml"),

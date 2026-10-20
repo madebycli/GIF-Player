@@ -4,6 +4,7 @@
 //! the standalone Rust interface renders with the same chrome as the host's native components:
 //! 38 px controls, radii of 3/6/9/12 px, 1 px outlines, a 2 px `secondary` focus ring and
 //! `hover`/`on_hover` for pointer feedback. Colours come from the live host palette.
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tiny_skia::Color;
 
@@ -31,8 +32,71 @@ pub const SLIDER_THUMB: i32 = 18;
 pub const TOGGLE_W: i32 = 40;
 pub const TOGGLE_H: i32 = 24;
 
+/// Effective settings supplied by Noctalia, retained with its palette for offline use.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostStyle {
+    pub corner_radius_scale: f32,
+    pub button_borders: bool,
+    pub input_borders: bool,
+    pub panel_borders: bool,
+    pub panel_border_width: f32,
+    pub panel_opacity: f32,
+    pub card_opacity: f32,
+    pub window_translucent: bool,
+    pub show_close_buttons: bool,
+    pub ui_scale: f32,
+}
+impl Default for HostStyle {
+    fn default() -> Self {
+        Self {
+            corner_radius_scale: 1.0,
+            button_borders: true,
+            input_borders: true,
+            panel_borders: true,
+            panel_border_width: 1.0,
+            panel_opacity: 1.0,
+            card_opacity: 1.0,
+            window_translucent: false,
+            show_close_buttons: true,
+            ui_scale: 1.0,
+        }
+    }
+}
+impl HostStyle {
+    pub fn parse(value: Option<&Value>) -> anyhow::Result<Self> {
+        let style: Self = match value {
+            Some(v) => serde_json::from_value(v.clone())?,
+            None => Self::default(),
+        };
+        anyhow::ensure!(
+            style.corner_radius_scale.is_finite()
+                && (0.0..=2.0).contains(&style.corner_radius_scale),
+            "Invalid corner radius scale"
+        );
+        anyhow::ensure!(
+            style.ui_scale.is_finite() && (0.1..=4.0).contains(&style.ui_scale),
+            "Invalid UI scale"
+        );
+        anyhow::ensure!(
+            style.panel_border_width.is_finite()
+                && (0.0..=20.0).contains(&style.panel_border_width),
+            "Invalid panel border width"
+        );
+        anyhow::ensure!(
+            [style.panel_opacity, style.card_opacity]
+                .iter()
+                .all(|n| n.is_finite() && (0.0..=1.0).contains(n)),
+            "Invalid theme opacity"
+        );
+        Ok(style)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct Theme {
+    pub style: HostStyle,
+    pub panel_border: Color,
     pub surface: Color,
     pub variant: Color,
     pub on_surface: Color,
@@ -55,6 +119,8 @@ impl Default for Theme {
     /// Dark lavender fallback used only before a Noctalia host has ever supplied a palette.
     fn default() -> Self {
         Self {
+            style: HostStyle::default(),
+            panel_border: rgb(72, 69, 80),
             surface: rgb(18, 18, 23),
             variant: rgb(32, 31, 36),
             on_surface: rgb(224, 222, 230),
@@ -81,6 +147,12 @@ pub fn parse_hex(value: &Value) -> Option<Color> {
     Some(rgb((value >> 16) as u8, (value >> 8) as u8, value as u8))
 }
 impl Theme {
+    pub fn from_appearance(value: &Value) -> Self {
+        let mut theme = Self::from_palette(&value["palette"]);
+        theme.style = HostStyle::parse(value.get("style")).unwrap_or_default();
+        theme.panel_border = parse_hex(&value["panel_border_color"]).unwrap_or(theme.outline);
+        theme
+    }
     pub fn from_palette(palette: &Value) -> Self {
         let mut theme = Self::default();
         for (name, target) in [

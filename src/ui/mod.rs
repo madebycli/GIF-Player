@@ -7,7 +7,7 @@ mod icons;
 mod kit;
 mod pages;
 mod text;
-mod theme;
+pub(crate) mod theme;
 
 use crate::{model::Engine, render::Rect};
 use anyhow::Result;
@@ -175,6 +175,9 @@ pub fn fold_text(text: &str) -> String {
         .collect()
 }
 impl Ui {
+    pub fn coordinate_scale(&self) -> f64 {
+        self.theme.style.ui_scale as f64
+    }
     pub fn new() -> Self {
         Self {
             open: false,
@@ -291,7 +294,8 @@ impl Ui {
             if appearance["font_family"] != self.appearance["font_family"] {
                 self.face = None;
             }
-            self.theme = Theme::from_palette(&appearance["palette"]);
+            self.theme = Theme::from_appearance(&appearance);
+            self.image_cache.clear();
             self.appearance = appearance;
             self.dirty = true;
         }
@@ -1429,6 +1433,19 @@ mod tests {
         ui.sections.insert("rename:Layout 02".into());
         let image = ui.draw(&engine, 640, 420, 1.5);
         assert_eq!((image.width(), image.height()), (960, 630));
+        // Responsive navigation changes the available page width and the height of the form.
+        // Locate the expanded row through scrolling instead of assuming one old sidebar geometry.
+        for offset in (0..=ui.scroll_max).step_by(40) {
+            ui.scroll = offset;
+            let _ = ui.draw(&engine, 640, 420, 1.5);
+            if ui
+                .hits
+                .iter()
+                .any(|h| matches!(&h.action, Action::Field(key) if key == "rename"))
+            {
+                break;
+            }
+        }
         assert!(
             ui.hits
                 .iter()
@@ -1637,6 +1654,71 @@ mod tests {
         ui.windowed = true;
         let flat = ui.draw(&engine, 600, 400, 1.0);
         assert_eq!(flat.pixel(0, 0).unwrap().alpha(), 255);
+    }
+    #[test]
+    fn effective_host_shapes_and_transparency_reach_pixels_live() {
+        let (_root, mut engine) = session();
+        let mut ui = Ui::new();
+        ui.windowed = false;
+        engine.dispatch(
+            &json!({"action":"appearance","palette":{"surface":"#123456"},"style":{
+                "corner_radius_scale":0.0,"panel_opacity":0.55,"panel_borders":false
+            }}),
+        );
+        ui.sync_appearance(&engine);
+        let square = ui.draw(&engine, 600, 400, 1.0);
+        assert!((square.pixel(0, 0).unwrap().alpha() as i32 - 140).abs() <= 1);
+        engine.dispatch(
+            &json!({"action":"appearance","palette":{"surface":"#123456"},"style":{
+                "corner_radius_scale":2.0,"panel_opacity":0.80,"panel_borders":false
+            }}),
+        );
+        ui.sync_appearance(&engine);
+        let rounded = ui.draw(&engine, 600, 400, 1.0);
+        assert_eq!(rounded.pixel(0, 0).unwrap().alpha(), 0);
+        assert!((rounded.pixel(300, 380).unwrap().alpha() as i32 - 204).abs() <= 1);
+    }
+    #[test]
+    fn small_and_scaled_displays_keep_navigation_and_hits_inside_the_viewport() {
+        let (_root, engine) = session();
+        for (w, h, host_scale) in [
+            (1366, 768, 1.0),
+            (1280, 720, 1.25),
+            (800, 600, 1.5),
+            (640, 360, 1.0),
+        ] {
+            let mut ui = Ui::new();
+            ui.theme.style.ui_scale = host_scale;
+            let pix = window(&mut ui, &engine, 0, w, h, 1.5);
+            assert_eq!(
+                (pix.width(), pix.height()),
+                ((w as f64 * 1.5) as u32, (h as f64 * 1.5) as u32)
+            );
+            for index in 0..4 {
+                assert!(
+                    ui.hits
+                        .iter()
+                        .any(|h| h.action == Action::Tab(index) && h.rect.w > 0 && h.rect.h > 0)
+                );
+            }
+            let (view_w, view_h) = (
+                (w as f32 / host_scale).floor() as i32,
+                (h as f32 / host_scale).floor() as i32,
+            );
+            for hit in ui.hits.iter().filter(|h| h.rect.w > 0 && h.rect.h > 0) {
+                assert!(
+                    hit.rect.x >= 0
+                        && hit.rect.y >= 0
+                        && hit.rect.x + hit.rect.w <= view_w
+                        && hit.rect.y + hit.rect.h <= view_h,
+                    "{}x{} at {}: {:?}",
+                    w,
+                    h,
+                    host_scale,
+                    hit.rect
+                );
+            }
+        }
     }
     #[test]
     fn keyboard_focus_follows_controls_by_identity_and_scrolls_into_view() {

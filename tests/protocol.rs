@@ -288,9 +288,12 @@ fn runtime_symlinks_are_rejected() {
 #[test]
 fn native_theme_updates_validate_and_persist() {
     let session = Session::new();
-    let result = session.request(json!({"action":"appearance","palette":{"primary":"#cbb9ff","surface":"#121217"},"font_family":"monospace"}));
+    let result = session.request(json!({"action":"appearance","palette":{"primary":"#cbb9ff","surface":"#121217"},"font_family":"monospace", "style":{"corner_radius_scale":0.0,"panel_opacity":0.55,"card_opacity":0.65,"panel_borders":false,"ui_scale":1.5}}));
     assert_eq!(result["ok"], true);
     let result = session.request(json!({"action":"appearance","palette":{"primary":"#bad"}}));
+    assert_eq!(result["ok"], false);
+    let result =
+        session.request(json!({"action":"appearance","palette":{},"style":{"ui_scale":0.0}}));
     assert_eq!(result["ok"], false);
     let snapshot = session.request(json!({"action":"snapshot"}));
     assert_eq!(
@@ -301,6 +304,15 @@ fn native_theme_updates_validate_and_persist() {
         snapshot["settings"]["appearance"]["font_family"],
         "monospace"
     );
+    assert_eq!(
+        snapshot["settings"]["appearance"]["style"]["corner_radius_scale"],
+        0.0
+    );
+    assert_eq!(
+        snapshot["settings"]["appearance"]["style"]["panel_opacity"],
+        0.55_f32
+    );
+    assert_eq!(snapshot["settings"]["appearance"]["style"]["ui_scale"], 1.5);
 }
 
 #[test]

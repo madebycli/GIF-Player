@@ -1,6 +1,6 @@
 # Noctalia GIF Player
 
-Native Noctalia 5 plugin, API 30 or newer. All visible controls use the host's
+Native Noctalia 5 plugin, API 31 or newer. All visible controls use the host's
 `ui.*`, `panel.*`, bar widget and shortcut APIs; Noctalia owns fonts, palettes,
 roundings, transitions, focus and panel placement. Playback runs in the Rust
 `gif-player` daemon, independently of Noctalia.
@@ -34,3 +34,5 @@ Community catalog publication requires the rights holder's license decision.
 See the preserved NOTICE.md and ../../docs/acceptance.md.
 
 Playback keeps the main actions visible and groups position, effects and advanced settings in expandable sections. Settings use explicit directory/layout Save controls, inline Rename and Delete confirmation. Collection changes propagate across frontends; images retain start/stop toggling and continuous scrolling. All controls remain genuine host ui.* components.
+
+The host.luau adapter reads effective Noctalia settings. Native card corners, borders and opacity are reapplied live; the Rust appearance IPC also carries these settings and accessibility UI scale. Native panels clamp to logical output dimensions, use responsive gallery columns and scroll their content. Playback controls now open as a centered floating overlay. Update the binary, restart the old daemon and rerun `gif-player install-plugin` to install the new adapter.
